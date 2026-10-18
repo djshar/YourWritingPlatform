@@ -1465,7 +1465,13 @@ function AuthPage({ register = false }) {
     setIsSubmitting(true);
     try {
       const { data, error } = register
-        ? await supabase.auth.signUp({ email, password })
+        ? await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo: `${window.location.origin}${window.location.pathname}`,
+          },
+        })
         : await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
 
@@ -1651,6 +1657,11 @@ function App() {
             : session
               ? <Navigate to="/dashboard" replace />
               : <AuthPage register />
+        } />
+        <Route path="*" element={
+          !authReady
+            ? <main className="auth-page"><h1>Loading…</h1></main>
+            : <Navigate to={session ? '/dashboard' : '/'} replace />
         } />
       </Routes>
       <Footer />
