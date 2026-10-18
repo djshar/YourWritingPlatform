@@ -465,7 +465,7 @@ function Navbar({ session }) {
 function Home() {
   return (
     <main className="home-main">
-      <section className="hero" aria-label="Writing platform introduction">
+      <section className="hero hero-image-banner" aria-label="Writing platform introduction">
         <span className="eyebrow">A home for your next story</span>
         <h1 className="hero-title">Make room for<br /><em>the whole story.</em></h1>
         <p className="hero-desc">
@@ -474,6 +474,7 @@ function Home() {
         </p>
         <Link to="/dashboard" className="cta-btn">Open your workspace <span aria-hidden="true">↗</span></Link>
         <div className="hero-note"><span className="note-dot" /> Your ideas stay saved on this device</div>
+        <span className="hero-image-credit">Photo by Angela Marie · CC BY-NC</span>
       </section>
       <section className="features" aria-label="Writing workspace features">
         <div className="feature-intro">
@@ -1600,6 +1601,7 @@ function Footer() {
         <>
           <p>Typography: <a href="https://fonts.google.com/specimen/Newsreader" rel="noreferrer" target="_blank">Newsreader</a> and <a href="https://fonts.google.com/specimen/DM+Sans" rel="noreferrer" target="_blank">DM Sans</a>, served by Google Fonts.</p>
           <p>These typefaces are distributed under the SIL Open Font License. Visit each font’s page for its license and specimen details.</p>
+          <p>Landing-page banner: “background.jpg” by Angela Marie, licensed under CC BY-NC. Cropped and converted to WebP for display. CC BY-NC permits noncommercial use only; confirm this license suits your use of the site.</p>
         </>
       ),
     },
