@@ -1297,17 +1297,53 @@
   margin-top: 7px;
 }
 
-.auth-form input {
+.auth-form input,
+.auth-form textarea {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 4px;
+  color: var(--ink);
   font-size: 13px;
   padding: 11px;
+}
+
+.auth-form textarea {
+  font-family: var(--sans);
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.auth-form input:focus,
+.auth-form textarea:focus {
+  border-color: var(--focus);
+  outline: 2px solid rgba(75, 105, 77, 0.08);
+}
+
+.auth-form input[readonly] {
+  color: var(--muted);
 }
 
 .auth-form .cta-btn {
   margin-top: 12px;
   width: 100%;
+}
+
+.profile-page {
+  max-width: 580px;
+}
+
+.profile-form {
+  max-width: 390px;
+}
+
+.profile-character-count {
+  color: var(--muted);
+  font-size: 10px;
+  text-align: right;
+}
+
+.profile-status {
+  margin-top: 18px !important;
 }
 
 .auth-workspace-link {

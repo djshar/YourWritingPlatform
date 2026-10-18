@@ -12,6 +12,8 @@ A React and Vite writing workspace. Signed-in users save one workspace per accou
 
 On a user's first login, if no cloud workspace exists, the app imports that browser's existing local workspace and saves it to the signed-in account. A cloud workspace takes precedence on later logins.
 
+Signed-in users can edit a display name and optional short bio under **Profile settings**. These are saved to Supabase Auth user metadata; the display name appears in the workspace navigation, and the bio is not displayed publicly.
+
 ## Deploy to GitHub Pages
 
 The repository workflow at [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) builds and deploys the site when code is pushed to `main`. In the GitHub repository settings:

@@ -427,6 +427,13 @@ function readWorkspace() {
   }
 }
 
+function workspaceLinkLabel(user) {
+  const displayName = user?.user_metadata?.display_name?.trim();
+  const emailName = user?.email?.split('@')[0]?.trim();
+  const name = displayName || emailName;
+  return name ? `${name}'s workspace` : 'My workspace';
+}
+
 function Navbar({ session }) {
   const [signOutError, setSignOutError] = useState('');
 
@@ -447,7 +454,8 @@ function Navbar({ session }) {
       <ul className="nav-list">
         {session ? (
           <>
-            <li><Link to="/dashboard">My workspace</Link></li>
+            <li><Link to="/dashboard">{workspaceLinkLabel(session.user)}</Link></li>
+            <li><Link to="/profile">Profile settings</Link></li>
             <li><button onClick={signOut} type="button">Log out</button></li>
           </>
         ) : (
@@ -1564,6 +1572,70 @@ function AuthPage({ register = false }) {
   );
 }
 
+function ProfileSettings({ user }) {
+  const [displayName, setDisplayName] = useState(user.user_metadata?.display_name ?? '');
+  const [bio, setBio] = useState(user.user_metadata?.bio ?? '');
+  const [status, setStatus] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+
+  const saveProfile = async (event) => {
+    event.preventDefault();
+    setStatus('');
+    setErrorMessage('');
+    setIsSaving(true);
+    try {
+      const { error } = await supabase.auth.updateUser({
+        data: {
+          display_name: displayName.trim() || null,
+          bio: bio.trim() || null,
+        },
+      });
+      if (error) throw error;
+      setStatus('Profile saved.');
+    } catch (error) {
+      console.error('Could not save profile settings.', error);
+      setErrorMessage(error.message || 'Could not save your profile. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <main className="auth-page profile-page">
+      <span className="eyebrow">Your account</span>
+      <h1>Profile settings</h1>
+      <p>Your display name personalizes your workspace link. Your bio is saved with your account and is not shown as a public profile.</p>
+      <form aria-label="Profile settings" className="auth-form profile-form" onSubmit={saveProfile}>
+        <label htmlFor="profile-email">Account email</label>
+        <input autoComplete="email" id="profile-email" readOnly value={user.email ?? ''} />
+        <label htmlFor="profile-display-name">Display name</label>
+        <input
+          autoComplete="name"
+          id="profile-display-name"
+          maxLength={40}
+          onChange={(event) => setDisplayName(event.target.value)}
+          placeholder={user.email?.split('@')[0] ?? 'Your name'}
+          value={displayName}
+        />
+        <label htmlFor="profile-bio">Short bio</label>
+        <textarea
+          id="profile-bio"
+          maxLength={240}
+          onChange={(event) => setBio(event.target.value)}
+          placeholder="A little about you or what you like to write…"
+          rows={4}
+          value={bio}
+        />
+        <span className="profile-character-count">{bio.length}/240</span>
+        <button className="cta-btn" disabled={isSaving} type="submit">{isSaving ? 'Saving…' : 'Save profile'}</button>
+      </form>
+      {status && <p className="profile-status" role="status">{status}</p>}
+      {errorMessage && <p className="profile-status" role="alert">{errorMessage}</p>}
+    </main>
+  );
+}
+
 function Footer() {
   const [activeSection, setActiveSection] = useState(null);
   const sections = {
@@ -1586,7 +1658,7 @@ function Footer() {
       content: (
         <>
           <p><strong>Prototype privacy notice · Updated 18 October 2026.</strong> This notice describes information handled when you visit or use Your Writing Platform. The prototype is hosted on GitHub Pages and uses Supabase for account authentication and cloud workspace storage. Applicable privacy requirements depend on where you and the project operator are located; this notice does not replace any rights or disclosures required by law.</p>
-          <p><strong>Information handled.</strong> When you register or sign in, Supabase Authentication processes your email address, password credentials, account identifier, and authentication/session data. The app does not store your password in its workspace table. When signed in, your books, chapters, drafts, settings, characters, world details, notes, and scenes are saved as workspace data in the Supabase project and associated with your account identifier. If a browser has an older locally saved workspace, the app may read it and upload it to your account the first time it finds no cloud workspace.</p>
+          <p><strong>Information handled.</strong> When you register or sign in, Supabase Authentication processes your email address, password credentials, account identifier, and authentication/session data. The app does not store your password in its workspace table. If you add them in Profile settings, your display name and optional short bio are saved as account metadata in Supabase; they personalize your signed-in navigation and are not presented as a public profile. When signed in, your books, chapters, drafts, settings, characters, world details, notes, and scenes are saved as workspace data in the Supabase project and associated with your account identifier. If a browser has an older locally saved workspace, the app may read it and upload it to your account the first time it finds no cloud workspace.</p>
           <p><strong>Browser storage and cookies.</strong> The app uses browser local storage for the Supabase sign-in session and may read an existing local workspace from an earlier version of the prototype. These are functional storage uses needed for sign-in and workspace continuity. The app does not intentionally use advertising, analytics, or cross-site tracking cookies. Your browser, GitHub Pages, Supabase, or other providers may use their own technical storage or logs to deliver, secure, and operate their services.</p>
           <p><strong>Technical and third-party requests.</strong> GitHub Pages and Supabase receive the network requests needed to deliver the app, authenticate users, and save work; their infrastructure may process technical data such as IP address, browser/device information, and request timestamps for operation and security. The app loads Newsreader and DM Sans from Google Fonts, so Google receives a request for those font resources and related connection information. Each provider handles information under its own terms and privacy practices.</p>
           <p><strong>Purpose, access, and sharing.</strong> Information is used to provide sign-in, save and retrieve workspaces, maintain and secure the prototype, and respond to support or legal requests. The project operator and people with authorized Supabase project access may be able to access account and workspace data. Supabase and hosting providers process information to provide their services. The operator does not sell personal information or use it for advertising, and the prototype does not send promotional emails.</p>
@@ -1705,6 +1777,13 @@ function App() {
             ? <main className="auth-page"><h1>Loading…</h1></main>
             : session
               ? <Dashboard key={session.user.id} userId={session.user.id} />
+              : <Navigate to="/login" replace />
+        } />
+        <Route path="/profile" element={
+          !authReady
+            ? <main className="auth-page"><h1>Loading…</h1></main>
+            : session
+              ? <ProfileSettings key={session.user.id} user={session.user} />
               : <Navigate to="/login" replace />
         } />
         <Route path="/login" element={
