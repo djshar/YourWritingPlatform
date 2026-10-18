@@ -505,6 +505,55 @@
   outline: 2px solid rgba(75, 105, 77, 0.08);
 }
 
+.book-management {
+  border-bottom: 1px solid var(--line-soft);
+  margin: 0 0 10px;
+  padding: 0 0 9px;
+}
+
+.book-management summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-family: var(--sans);
+  font-size: 10px;
+  list-style-position: inside;
+  padding: 6px 0;
+}
+
+.book-management summary:hover {
+  color: var(--green-dark);
+}
+
+.delete-book-button {
+  background: transparent;
+  border: 0;
+  color: #9a5149;
+  cursor: pointer;
+  display: block;
+  font-family: var(--sans);
+  font-size: 10px;
+  padding: 6px 0 4px 15px;
+  text-align: left;
+}
+
+.delete-book-button:hover:not(:disabled) {
+  color: #76362f;
+  text-decoration: underline;
+}
+
+.delete-book-button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.book-management-hint {
+  color: var(--muted);
+  display: block;
+  font-size: 9px;
+  line-height: 1.5;
+  padding-left: 15px;
+}
+
 .add-book-button {
   align-self: flex-start;
   background: transparent;

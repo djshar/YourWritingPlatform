@@ -596,6 +596,7 @@ function WritingPanel({
   isAddingBook,
   newBookTitle,
   onBookChange,
+  onDeleteBook,
   onAddBookClick,
   onNewBookTitleChange,
   onAddBookSubmit,
@@ -881,6 +882,18 @@ function WritingPanel({
             {books.map((book) => <option key={book.id} value={book.id}>{book.title}</option>)}
           </select>
         </div>
+        <details className="book-management">
+          <summary>Story options</summary>
+          <button
+            className="delete-book-button"
+            disabled={books.length <= 1}
+            onClick={() => onDeleteBook(activeBook.id)}
+            type="button"
+          >
+            Delete this story
+          </button>
+          {books.length <= 1 && <span className="book-management-hint">Keep at least one story in your workspace.</span>}
+        </details>
         {isAddingBook ? (
           <form className="add-book-form" onSubmit={onAddBookSubmit}>
             <label className="visually-hidden" htmlFor="new-book-title">New book title</label>
@@ -1245,6 +1258,22 @@ function Dashboard({ userId }) {
 
   const activeBook = workspace.books.find((book) => book.id === workspace.activeBookId) ?? workspace.books[0];
   const switchBook = (bookId) => updateWorkspace({ activeBookId: bookId });
+  const deleteBook = (bookId) => {
+    const bookToDelete = workspace.books.find((book) => book.id === bookId);
+    if (!bookToDelete || workspace.books.length <= 1) return;
+
+    const confirmed = window.confirm(`Delete "${bookToDelete.title}" and all of its chapters, notes, and planning data? This cannot be undone.`);
+    if (!confirmed) return;
+
+    updateWorkspace((current) => {
+      const deletedIndex = current.books.findIndex((book) => book.id === bookId);
+      const books = current.books.filter((book) => book.id !== bookId);
+      const activeBookId = current.activeBookId === bookId
+        ? books[Math.min(deletedIndex, books.length - 1)].id
+        : current.activeBookId;
+      return { ...current, books, activeBookId };
+    });
+  };
 
   useEffect(() => {
     const pending = pendingReviewRef.current;
@@ -1437,6 +1466,7 @@ function Dashboard({ userId }) {
             spellCheck={activeBook.spellCheck !== false}
             onAddChapter={addChapter}
             onAddBookClick={() => setIsAddingBook(true)}
+            onDeleteBook={deleteBook}
             onAddBookSubmit={addBook}
             onBookChange={switchBook}
             onCancelAddBook={() => { setIsAddingBook(false); setNewBookTitle(''); }}
