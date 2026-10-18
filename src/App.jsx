@@ -350,6 +350,10 @@ async function exportManuscript(book, format) {
     const pageWidth = pdf.internal.pageSize.getWidth();
     const pageHeight = pdf.internal.pageSize.getHeight();
     let y = margin;
+    const addPage = () => {
+      pdf.addPage();
+      y = margin;
+    };
     const writeText = (text, { size, bold = false, gapAfter = 5, font = bodyFont, alignment = 'left', lineSpacing = '1.5', indent = 0 }) => {
       pdf.setFont(font, bold ? 'bold' : 'normal');
       pdf.setFontSize(size);
@@ -358,8 +362,7 @@ async function exportManuscript(book, format) {
       const indentMillimeters = indent * size / 0.75 * 25.4 / 72;
       lines.forEach((line, index) => {
         if (y + lineHeight > pageHeight - margin) {
-          pdf.addPage();
-          y = margin;
+          addPage();
         }
         pdf.text(line, margin + (index === 0 ? indentMillimeters : 0), y, { align: alignment });
         y += lineHeight;
@@ -369,6 +372,7 @@ async function exportManuscript(book, format) {
 
     writeText(book.title, { size: 20, bold: true, gapAfter: 12, font: 'times' });
     chapters.forEach((chapter) => {
+      addPage();
       writeText(chapter.title, { size: 16, bold: true, gapAfter: 6, font: 'times' });
       getChapterParagraphs(chapter.source).forEach((paragraph) => {
         writeText(paragraph.text, {
@@ -381,6 +385,26 @@ async function exportManuscript(book, format) {
       });
       y += 8;
     });
+
+    if (book.notes.length > 0) {
+      addPage();
+      writeText('Notes', { size: 18, bold: true, gapAfter: 12, font: 'times' });
+      book.notes.forEach((note, index) => {
+        writeText(note.title?.trim() || `Note ${index + 1}`, { size: 13, bold: true, gapAfter: 3, font: 'times' });
+        if (note.kind?.trim()) writeText(note.kind, { size: 9, bold: true, gapAfter: 4 });
+        if (note.body?.trim()) writeText(note.body, { size: 10, gapAfter: 5 });
+        if (note.excerpt?.trim()) {
+          writeText(`Highlighted passage${note.chapterTitle ? ` · ${note.chapterTitle}` : ''}:`, {
+            size: 9,
+            bold: true,
+            gapAfter: 3,
+          });
+          writeText(note.excerpt, { size: 10, gapAfter: 5 });
+        }
+        y += 5;
+      });
+    }
+
     pdf.save(`${filename}.pdf`);
     return;
   }
