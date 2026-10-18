@@ -14,10 +14,8 @@ On a user's first login, if no cloud workspace exists, the app imports that brow
 
 ## Deploy to GitHub Pages
 
-The repository workflow at [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) builds and deploys the site when code is pushed to `main`. In the GitHub repository settings:
+The repository workflow at [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) builds and deploys the site when code is pushed to `main`. It currently contains the Supabase project URL and publishable key in its frontend build configuration. Publishable keys are public and are included in the deployed site; never put a Supabase secret/service-role key in the workflow or frontend.
 
-1. Under **Pages**, select **GitHub Actions** as the build and deployment source.
-2. Under **Settings → Secrets and variables → Actions → Variables**, add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. The anon/publishable key is embedded in the public frontend by design; database security must come from the row-level security policies.
-3. Push to `main` or manually run the deployment workflow.
+In the GitHub repository settings, under **Pages**, select **GitHub Actions** as the build and deployment source. Push to `main` or manually run the deployment workflow. Database security must come from the row-level security policies.
 
 The Vite config and hash-based routes support the project Pages URL at `https://djshar.github.io/YourWritingPlatform/`.
