@@ -21,8 +21,8 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     env:
-      VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
-      VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+      VITE_SUPABASE_URL: https://argjomrrzxxyqcvguznh.supabase.co
+      VITE_SUPABASE_ANON_KEY: sb_publishable_hwN_Tx22jt7m0ITgygqhqg_Gmnok-3T
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -36,7 +36,7 @@ jobs:
       - name: Check Supabase configuration
         run: |
           if [ -z "$VITE_SUPABASE_URL" ] || [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
-            echo "::error::Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in the repository Actions variables."
+            echo "::error::Supabase URL or publishable key is missing from the workflow configuration."
             exit 1
           fi
       - name: Build
