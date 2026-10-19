@@ -4,11 +4,91 @@ import { supabase } from './lib/supabase';
 import './App.css';
 
 const STORAGE_KEY = 'writing-platform-workspace';
+const LOCAL_PREVIEW_WORKSPACE_KEY = 'writing-platform-local-preview-workspace';
+const DAILY_GOAL_STORAGE_PREFIX = 'writing-platform-daily-goal';
+const LOCAL_PREVIEW_PROFILE_KEY = 'writing-platform-local-preview-profile';
+const BOOK_COVER_BUCKET = 'book-covers';
+const MAX_BOOK_COVER_BYTES = 5 * 1024 * 1024;
+
+function countWords(text = '') {
+  const trimmed = text.trim();
+  return trimmed ? trimmed.split(/\s+/).length : 0;
+}
+
+function getDailyWordCounts(workspace) {
+  return Object.fromEntries(workspace.books.flatMap((book) => book.chapters.map((chapter) => [
+    `${book.id}:${chapter.id}`,
+    countWords(chapter.content ?? ''),
+  ])));
+}
+
+function localDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function readDailyGoalState(userId, wordCounts) {
+  const date = localDateKey();
+  const key = `${DAILY_GOAL_STORAGE_PREFIX}:${userId}`;
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(key) ?? 'null');
+    if (
+      saved?.date === date
+      && saved.baselineCounts
+      && typeof saved.baselineCounts === 'object'
+      && Number.isFinite(saved.seconds)
+    ) return saved;
+  } catch (error) {
+    console.error('Could not read daily writing goal progress.', error);
+  }
+
+  const state = { date, baselineCounts: wordCounts, seconds: 0 };
+  try {
+    window.localStorage.setItem(key, JSON.stringify(state));
+  } catch (error) {
+    console.error('Could not save daily writing goal progress.', error);
+  }
+  return state;
+}
+
+function saveDailyGoalState(userId, state) {
+  try {
+    window.localStorage.setItem(`${DAILY_GOAL_STORAGE_PREFIX}:${userId}`, JSON.stringify(state));
+  } catch (error) {
+    console.error('Could not save daily writing goal progress.', error);
+  }
+}
+
+function makeGoalProgress(goal, dailyState, wordCounts) {
+  if (!goal || !['words', 'minutes'].includes(goal.daily_goal_type)) return null;
+  const target = Number(goal.daily_goal_target);
+  if (!Number.isFinite(target) || target < 1) return null;
+
+  const done = goal.daily_goal_type === 'words'
+    ? Object.entries(wordCounts).reduce((total, [chapterKey, words]) => (
+      total + Math.max(0, words - (dailyState.baselineCounts[chapterKey] ?? 0))
+    ), 0)
+    : dailyState.seconds / 60;
+  const unit = goal.daily_goal_type === 'words' ? 'words' : 'minutes';
+  const displayedDone = goal.daily_goal_type === 'words' ? done : Math.floor(done);
+  const label = `${displayedDone} / ${target} ${unit} today`;
+
+  return {
+    percent: Math.min(100, Math.round((done / target) * 100)),
+    label,
+  };
+}
 
 function createBook(id, title) {
   return {
     id,
     title,
+    coverSubtitle: '',
+    blurb: '',
+    authorName: '',
+    coverImagePath: '',
     chapters: [{ id: `${id}-chapter-1`, title: 'Chapter 1', content: '' }],
     activeChapterId: `${id}-chapter-1`,
     editorFont: 'serif',
@@ -47,6 +127,10 @@ function normalizeBook(book, index) {
   normalized.notes = Array.isArray(book.notes) ? book.notes : [];
   normalized.scenes = Array.isArray(book.scenes) ? book.scenes : [];
   normalized.spellCheck = book.spellCheck !== false;
+  normalized.coverSubtitle = typeof book.coverSubtitle === 'string' ? book.coverSubtitle : '';
+  normalized.blurb = typeof book.blurb === 'string' ? book.blurb : '';
+  normalized.authorName = typeof book.authorName === 'string' ? book.authorName : '';
+  normalized.coverImagePath = typeof book.coverImagePath === 'string' ? book.coverImagePath : '';
   return normalized;
 }
 
@@ -239,7 +323,12 @@ function textFromEditorNode(node) {
 function editorHtmlToPlainText(html) {
   const parsed = new DOMParser().parseFromString(sanitizeEditorHtml(html), 'text/html');
   return [...parsed.body.children].map((paragraph) => {
-    if (paragraph.tagName === 'P' && paragraph.childElementCount === 1 && paragraph.firstElementChild.tagName === 'BR') return '';
+    if (
+      paragraph.tagName === 'P'
+      && paragraph.childElementCount === 1
+      && paragraph.firstElementChild.tagName === 'BR'
+      && !paragraph.textContent
+    ) return '';
     return textFromEditorNode(paragraph);
   }).join('\n');
 }
@@ -412,9 +501,9 @@ async function exportManuscript(book, format) {
   throw new Error(`Unsupported manuscript export format: ${format}`);
 }
 
-function readWorkspace() {
+function readWorkspace(storageKey = STORAGE_KEY) {
   try {
-    const saved = window.localStorage.getItem(STORAGE_KEY);
+    const saved = window.localStorage.getItem(storageKey);
     if (!saved) return initialWorkspace;
     const parsed = JSON.parse(saved);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -427,6 +516,21 @@ function readWorkspace() {
   }
 }
 
+function readLocalPreviewProfile() {
+  try {
+    const saved = window.localStorage.getItem(LOCAL_PREVIEW_PROFILE_KEY);
+    if (!saved) return {};
+    const parsed = JSON.parse(saved);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Saved local preview profile has an invalid format.');
+    }
+    return parsed;
+  } catch (error) {
+    console.error('Could not read the local preview profile.', error);
+    return {};
+  }
+}
+
 function workspaceLinkLabel(user) {
   const displayName = user?.user_metadata?.display_name?.trim();
   const emailName = user?.email?.split('@')[0]?.trim();
@@ -434,7 +538,7 @@ function workspaceLinkLabel(user) {
   return name ? `${name}'s workspace` : 'My workspace';
 }
 
-function Navbar({ session }) {
+function Navbar({ session, goalProgress, offlinePreview = false }) {
   const [signOutError, setSignOutError] = useState('');
 
   const signOut = async () => {
@@ -452,11 +556,30 @@ function Navbar({ session }) {
         <span className="brand-title">Your Writing Platform</span>
       </Link>
       <ul className="nav-list">
-        {session ? (
+        {session || offlinePreview ? (
           <>
-            <li><Link to="/dashboard">{workspaceLinkLabel(session.user)}</Link></li>
+            <li className="nav-profile-item">
+              <Link to="/dashboard">{offlinePreview ? 'Local preview workspace' : workspaceLinkLabel(session.user)}</Link>
+              {goalProgress && (
+                <div className="nav-goal-progress">
+                  <div
+                    aria-label={`Daily writing goal ${goalProgress.percent}% complete`}
+                    aria-valuemax={100}
+                    aria-valuemin={0}
+                    aria-valuenow={goalProgress.percent}
+                    className="nav-goal-progress-track"
+                    role="progressbar"
+                  >
+                    <span style={{ width: `${goalProgress.percent}%` }} />
+                  </div>
+                  <span>{goalProgress.percent}% complete · {goalProgress.label}</span>
+                </div>
+              )}
+            </li>
             <li><Link to="/profile">Profile settings</Link></li>
-            <li><button onClick={signOut} type="button">Log out</button></li>
+            {offlinePreview
+              ? <li><Link to="/">Exit preview</Link></li>
+              : <li><button onClick={signOut} type="button">Log out</button></li>}
           </>
         ) : (
           <>
@@ -594,6 +717,160 @@ function CollectionPanel({ config, items, onAdd, onUpdate, onRemove, onMove, onR
   );
 }
 
+function BookCoverEditor({ activeBook, userId, offlinePreview, onUpdateBook }) {
+  const [signedCoverUrl, setSignedCoverUrl] = useState('');
+  const [localCoverUrl, setLocalCoverUrl] = useState('');
+  const [coverStatus, setCoverStatus] = useState('');
+  const [coverError, setCoverError] = useState('');
+  const localCoverUrlRef = useRef('');
+  const coverUrl = offlinePreview ? localCoverUrl : signedCoverUrl;
+
+  useEffect(() => () => {
+    if (localCoverUrlRef.current) URL.revokeObjectURL(localCoverUrlRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (offlinePreview || !activeBook.coverImagePath) {
+      setSignedCoverUrl('');
+      return undefined;
+    }
+
+    let current = true;
+    setCoverError('');
+    supabase.storage
+      .from(BOOK_COVER_BUCKET)
+      .createSignedUrl(activeBook.coverImagePath, 60 * 60)
+      .then(({ data, error }) => {
+        if (error) throw error;
+        if (current) setSignedCoverUrl(data.signedUrl);
+      })
+      .catch((error) => {
+        console.error('Could not load this book cover from Supabase Storage.', error);
+        if (current) setCoverError('Could not load the cover image. Check your connection and storage setup.');
+      });
+
+    return () => { current = false; };
+  }, [activeBook.coverImagePath, offlinePreview]);
+
+  const updateBookField = (field, value) => onUpdateBook(activeBook.id, { [field]: value });
+
+  const uploadCover = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    setCoverStatus('');
+    setCoverError('');
+    if (!file) return;
+    if (!['image/jpeg', 'image/png', 'image/webp', 'image/avif'].includes(file.type)) {
+      setCoverError('Choose a JPEG, PNG, WebP, or AVIF image.');
+      return;
+    }
+    if (file.size > MAX_BOOK_COVER_BYTES) {
+      setCoverError('Cover images must be 5 MB or smaller.');
+      return;
+    }
+
+    if (offlinePreview) {
+      if (localCoverUrlRef.current) URL.revokeObjectURL(localCoverUrlRef.current);
+      const imageUrl = URL.createObjectURL(file);
+      localCoverUrlRef.current = imageUrl;
+      setLocalCoverUrl(imageUrl);
+      return;
+    }
+
+    setCoverStatus('Uploading cover…');
+    try {
+      const imagePath = `${userId}/${activeBook.id}/cover`;
+      const { error } = await supabase.storage
+        .from(BOOK_COVER_BUCKET)
+        .upload(imagePath, file, {
+          cacheControl: '3600',
+          contentType: file.type,
+          upsert: true,
+        });
+      if (error) throw error;
+      const { data: signedImage, error: signedUrlError } = await supabase.storage
+        .from(BOOK_COVER_BUCKET)
+        .createSignedUrl(imagePath, 60 * 60);
+      if (signedUrlError) throw signedUrlError;
+      onUpdateBook(activeBook.id, { coverImagePath: imagePath });
+      setSignedCoverUrl(signedImage.signedUrl);
+      setCoverStatus('Cover uploaded.');
+    } catch (error) {
+      console.error('Could not upload the book cover.', error);
+      setCoverStatus('');
+      setCoverError(error.message || 'Could not upload the cover. Please try again.');
+    }
+  };
+
+  return (
+    <section aria-labelledby="book-cover-heading" className="book-cover-editor">
+      <h3 id="book-cover-heading">Book cover</h3>
+      <label className="book-cover-field">
+        <span>Title</span>
+        <input aria-label="Book cover title" readOnly value={activeBook.title} />
+      </label>
+      <label className="book-cover-field">
+        <span>Subtitle text</span>
+        <input
+          aria-label="Book cover subtitle"
+          maxLength={120}
+          onChange={(event) => updateBookField('coverSubtitle', event.target.value)}
+          placeholder="Optional subtitle"
+          value={activeBook.coverSubtitle}
+        />
+      </label>
+      <label className="book-cover-field">
+        <span>Blurb</span>
+        <textarea
+          aria-label="Book blurb"
+          maxLength={2000}
+          onChange={(event) => updateBookField('blurb', event.target.value)}
+          placeholder="This will be where the blurb/summary of your novel will go."
+          rows={4}
+          value={activeBook.blurb}
+        />
+      </label>
+      <label className="book-cover-field">
+        <span>Author name</span>
+        <input
+          aria-label="Book author name"
+          maxLength={100}
+          onChange={(event) => updateBookField('authorName', event.target.value)}
+          placeholder="Your name"
+          value={activeBook.authorName}
+        />
+      </label>
+      <label className="book-cover-field">
+        <span>Upload a cover image</span>
+        <input
+          accept="image/jpeg,image/png,image/webp,image/avif"
+          aria-label="Upload book cover"
+          onChange={uploadCover}
+          type="file"
+        />
+      </label>
+      <div className="book-cover-preview-wrap">
+        <div
+          aria-label={`Cover preview for ${activeBook.title}`}
+          className="book-cover-preview"
+          role="img"
+          style={coverUrl ? { backgroundImage: `url("${coverUrl}")` } : undefined}
+        >
+          <div className="book-cover-title">
+            <strong>{activeBook.title || 'Your story title'}</strong>
+            {activeBook.coverSubtitle && <span>{activeBook.coverSubtitle}</span>}
+          </div>
+          {activeBook.authorName && <span className="book-cover-author">by {activeBook.authorName}</span>}
+        </div>
+      </div>
+      {activeBook.blurb && <p className="book-cover-blurb">{activeBook.blurb}</p>}
+      <p className="book-cover-status" role={coverError ? 'alert' : 'status'}>
+        {coverError || coverStatus || 'Cover images must be 5 MB or smaller.'}
+      </p>
+    </section>
+  );
+}
+
 function WritingPanel({
   books,
   activeBook,
@@ -606,6 +883,7 @@ function WritingPanel({
   newBookTitle,
   onBookChange,
   onDeleteBook,
+  onRenameBook,
   onAddBookClick,
   onNewBookTitleChange,
   onAddBookSubmit,
@@ -619,6 +897,9 @@ function WritingPanel({
   onCreateHighlight,
   onAddChapter,
   onUpdateChapter,
+  userId,
+  offlinePreview,
+  onUpdateBook,
 }) {
   const manuscriptRef = useRef(null);
   const selectedRangeRef = useRef(null);
@@ -631,6 +912,10 @@ function WritingPanel({
       : '<p><br></p>';
   }
   const [hasSelection, setHasSelection] = useState(false);
+  const [editorCounts, setEditorCounts] = useState(() => ({
+    words: countWords(activeChapter?.content ?? ''),
+    characters: (activeChapter?.content ?? '').replace(/\r?\n/g, '').length,
+  }));
   const [selectedAlignment, setSelectedAlignment] = useState('left');
   const [selectedLineSpacing, setSelectedLineSpacing] = useState('1.5');
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
@@ -800,30 +1085,50 @@ function WritingPanel({
     const editor = manuscriptRef.current;
     if (!editor || !activeChapter) return;
     const html = sanitizeEditorHtml(editor.innerHTML);
-    onUpdateChapter(activeChapter.id, 'content', editorHtmlToPlainText(html));
+    if (editor.innerHTML !== html) editor.innerHTML = html;
+    const text = editorHtmlToPlainText(html);
+    updateEditorCounts(text);
+    const hasText = Boolean(text.trim());
+    editor.classList.toggle('manuscript-empty', !hasText);
+    editor.dataset.empty = String(!hasText);
+    onUpdateChapter(activeChapter.id, 'content', text);
     onUpdateChapter(activeChapter.id, 'contentHtml', html);
     selectedRangeRef.current = null;
     setHasSelection(false);
   };
 
+  const updateEditorCounts = (text) => {
+    const counts = {
+      words: countWords(text),
+      characters: text.replace(/\r?\n/g, '').length,
+    };
+    setEditorCounts(counts);
+  };
+
   const handleEditorPaste = (event) => {
     event.preventDefault();
-    const editor = manuscriptRef.current;
+    const editor = event.currentTarget;
     const selection = window.getSelection();
-    if (!editor || !selection?.rangeCount) return;
+    if (!editor || !activeChapter) return;
+    const pastedText = event.clipboardData?.getData('text/plain') ?? '';
+    if (!pastedText) return;
 
-    const range = selection.getRangeAt(0);
-    if (!editor.contains(range.startContainer) || !editor.contains(range.endContainer)) return;
-    range.deleteContents();
-    const pastedText = event.clipboardData.getData('text/plain');
-    if (pastedText) {
-      const textNode = document.createTextNode(pastedText);
-      range.insertNode(textNode);
-      range.setStartAfter(textNode);
-      range.collapse(true);
-      selection.removeAllRanges();
-      selection.addRange(range);
+    const currentRange = selection?.rangeCount ? selection.getRangeAt(0) : null;
+    const hasEditorSelection = currentRange
+      && editor.contains(currentRange.startContainer)
+      && editor.contains(currentRange.endContainer);
+    const range = hasEditorSelection ? currentRange : document.createRange();
+    if (!hasEditorSelection) {
+      range.selectNodeContents(editor);
+      range.collapse(false);
     }
+    range.deleteContents();
+    const textNode = document.createTextNode(pastedText);
+    range.insertNode(textNode);
+    range.setStartAfter(textNode);
+    range.collapse(true);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
     handleEditorInput();
   };
 
@@ -891,6 +1196,13 @@ function WritingPanel({
             {books.map((book) => <option key={book.id} value={book.id}>{book.title}</option>)}
           </select>
         </div>
+        <BookCoverEditor
+          activeBook={activeBook}
+          key={activeBook.id}
+          offlinePreview={offlinePreview}
+          onUpdateBook={onUpdateBook}
+          userId={userId}
+        />
         <details className="book-management">
           <summary>Story options</summary>
           <button
@@ -902,6 +1214,27 @@ function WritingPanel({
             Delete this story
           </button>
           {books.length <= 1 && <span className="book-management-hint">Keep at least one story in your workspace.</span>}
+          <form
+            className="rename-book-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const title = new FormData(event.currentTarget).get('story-title');
+              onRenameBook(activeBook.id, title);
+            }}
+          >
+            <label htmlFor="story-title">Rename this story</label>
+            <div>
+              <input
+                defaultValue={activeBook.title}
+                id="story-title"
+                key={activeBook.id}
+                maxLength={100}
+                name="story-title"
+                required
+              />
+              <button className="text-button" type="submit">Save</button>
+            </div>
+          </form>
         </details>
         {isAddingBook ? (
           <form className="add-book-form" onSubmit={onAddBookSubmit}>
@@ -1109,7 +1442,7 @@ function WritingPanel({
             />
             <div className="writing-footer">
               <span title="Character count includes spaces and punctuation; line breaks are excluded">
-                {`${activeChapter.content.trim() ? activeChapter.content.trim().split(/\s+/).length : 0} words · ${activeChapter.content.replace(/\r?\n/g, '').length} characters`}
+                {`${editorCounts.words} words · ${editorCounts.characters} characters`}
               </span>
               <div className="writing-footer-actions">
                 <button
@@ -1118,6 +1451,7 @@ function WritingPanel({
                     if (manuscriptRef.current) manuscriptRef.current.innerHTML = '<p><br></p>';
                     selectedRangeRef.current = null;
                     setHasSelection(false);
+                    setEditorCounts({ words: 0, characters: 0 });
                     onUpdateChapter(activeChapter.id, 'content', '');
                     onUpdateChapter(activeChapter.id, 'contentHtml', '');
                   }}
@@ -1168,8 +1502,10 @@ function ThemeSwitch({ theme, onChange }) {
   );
 }
 
-function Dashboard({ userId }) {
+function Dashboard({ userId, userMetadata, onGoalProgress, offlinePreview = false }) {
   const [workspace, setWorkspace] = useState(initialWorkspace);
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [workspaceLoadError, setWorkspaceLoadError] = useState('');
   const [loadAttempt, setLoadAttempt] = useState(0);
@@ -1180,6 +1516,7 @@ function Dashboard({ userId }) {
   const pendingReviewRef = useRef(null);
   const saveQueueRef = useRef(Promise.resolve());
   const saveRevisionRef = useRef(0);
+  const dailyGoalStateRef = useRef(null);
 
   useEffect(() => {
     let current = true;
@@ -1188,6 +1525,15 @@ function Dashboard({ userId }) {
       setWorkspaceReady(false);
       setWorkspaceLoadError('');
       try {
+        if (offlinePreview) {
+          if (current) {
+            setWorkspace(readWorkspace(LOCAL_PREVIEW_WORKSPACE_KEY));
+            setWorkspaceReady(true);
+            setSaveStatus('Saved on this device');
+          }
+          return;
+        }
+
         const { data, error } = await supabase
           .from('user_workspaces')
           .select('workspace')
@@ -1219,7 +1565,7 @@ function Dashboard({ userId }) {
 
     loadWorkspace();
     return () => { current = false; };
-  }, [userId, loadAttempt]);
+  }, [userId, loadAttempt, offlinePreview]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = workspace.theme;
@@ -1230,9 +1576,15 @@ function Dashboard({ userId }) {
 
     const timeout = window.setTimeout(() => {
       const revision = ++saveRevisionRef.current;
-      setSaveStatus('Saving to cloud…');
+      setSaveStatus(offlinePreview ? 'Saving to this device…' : 'Saving to cloud…');
       saveQueueRef.current = saveQueueRef.current
         .then(async () => {
+          if (offlinePreview) {
+            window.localStorage.setItem(LOCAL_PREVIEW_WORKSPACE_KEY, JSON.stringify(workspace));
+            if (revision === saveRevisionRef.current) setSaveStatus('Saved on this device');
+            return;
+          }
+
           const { error } = await supabase.from('user_workspaces').upsert({
             user_id: userId,
             workspace,
@@ -1242,13 +1594,51 @@ function Dashboard({ userId }) {
           if (revision === saveRevisionRef.current) setSaveStatus('Saved to cloud');
         })
         .catch((error) => {
-          console.error('Could not save the writing workspace to Supabase.', error);
-          if (revision === saveRevisionRef.current) setSaveStatus('Could not save to cloud');
+          console.error(
+            offlinePreview ? 'Could not save the local preview workspace.' : 'Could not save the writing workspace to Supabase.',
+            error,
+          );
+          if (revision === saveRevisionRef.current) {
+            setSaveStatus(offlinePreview ? 'Could not save on this device' : 'Could not save to cloud');
+          }
         });
     }, 350);
 
     return () => window.clearTimeout(timeout);
-  }, [workspace, userId, workspaceReady]);
+  }, [workspace, userId, workspaceReady, offlinePreview]);
+
+  useEffect(() => {
+    if (!workspaceReady) return;
+    const wordCounts = getDailyWordCounts(workspace);
+    const dailyState = readDailyGoalState(userId, wordCounts);
+    dailyGoalStateRef.current = dailyState;
+    onGoalProgress(makeGoalProgress(userMetadata, dailyState, wordCounts));
+  }, [workspace, workspaceReady, userId, userMetadata, onGoalProgress]);
+
+  useEffect(() => {
+    if (!workspaceReady || userMetadata?.daily_goal_type !== 'minutes') return undefined;
+
+    const timer = window.setInterval(() => {
+      const editor = document.activeElement;
+      if (
+        document.visibilityState !== 'visible'
+        || !(editor instanceof HTMLElement)
+        || !editor.classList.contains('manuscript-input')
+      ) return;
+
+      const wordCounts = getDailyWordCounts(workspaceRef.current);
+      let dailyState = dailyGoalStateRef.current ?? readDailyGoalState(userId, wordCounts);
+      if (dailyState.date !== localDateKey()) {
+        dailyState = readDailyGoalState(userId, wordCounts);
+      }
+      dailyState.seconds += 1;
+      dailyGoalStateRef.current = dailyState;
+      saveDailyGoalState(userId, dailyState);
+      onGoalProgress(makeGoalProgress(userMetadata, dailyState, {}));
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [workspaceReady, userId, userMetadata, onGoalProgress]);
 
   const updateWorkspace = (updater) => {
     setSaveStatus('Saving…');
@@ -1265,14 +1655,41 @@ function Dashboard({ userId }) {
     }));
   };
 
+  const updateBook = (bookId, updates) => {
+    updateWorkspace((current) => ({
+      ...current,
+      books: current.books.map((book) => book.id === bookId ? { ...book, ...updates } : book),
+    }));
+  };
+
   const activeBook = workspace.books.find((book) => book.id === workspace.activeBookId) ?? workspace.books[0];
   const switchBook = (bookId) => updateWorkspace({ activeBookId: bookId });
-  const deleteBook = (bookId) => {
+  const renameBook = (bookId, title) => {
+    const normalizedTitle = title.trim();
+    if (!normalizedTitle) return;
+    updateWorkspace((current) => ({
+      ...current,
+      books: current.books.map((book) => book.id === bookId ? { ...book, title: normalizedTitle } : book),
+    }));
+  };
+  const deleteBook = async (bookId) => {
     const bookToDelete = workspace.books.find((book) => book.id === bookId);
     if (!bookToDelete || workspace.books.length <= 1) return;
 
     const confirmed = window.confirm(`Delete "${bookToDelete.title}" and all of its chapters, notes, and planning data? This cannot be undone.`);
     if (!confirmed) return;
+
+    if (bookToDelete.coverImagePath && !offlinePreview) {
+      try {
+        const { error } = await supabase.storage
+          .from(BOOK_COVER_BUCKET)
+          .remove([bookToDelete.coverImagePath]);
+        if (error) throw error;
+      } catch (error) {
+        console.error('Could not remove the deleted story cover from Supabase Storage.', error);
+        window.alert('The story will be deleted, but its cover image could not be removed from storage.');
+      }
+    }
 
     updateWorkspace((current) => {
       const deletedIndex = current.books.findIndex((book) => book.id === bookId);
@@ -1433,6 +1850,11 @@ function Dashboard({ userId }) {
 
   return (
     <main className="workspace">
+      {offlinePreview && (
+        <p className="local-preview-notice" role="status">
+          Offline preview: your work is saved only in this browser and does not sync to your live account.
+        </p>
+      )}
       <header className="workspace-header">
         <div>
           <div className="breadcrumb"><span>MY STORIES</span><span aria-hidden="true">/</span><span>{activeBook.title}</span></div>
@@ -1476,6 +1898,7 @@ function Dashboard({ userId }) {
             onAddChapter={addChapter}
             onAddBookClick={() => setIsAddingBook(true)}
             onDeleteBook={deleteBook}
+            onRenameBook={renameBook}
             onAddBookSubmit={addBook}
             onBookChange={switchBook}
             onCancelAddBook={() => { setIsAddingBook(false); setNewBookTitle(''); }}
@@ -1488,6 +1911,9 @@ function Dashboard({ userId }) {
             onCreateHighlight={createHighlight}
             onNewBookTitleChange={setNewBookTitle}
             onUpdateChapter={updateChapter}
+            onUpdateBook={updateBook}
+            userId={userId}
+            offlinePreview={offlinePreview}
             isAddingBook={isAddingBook}
             newBookTitle={newBookTitle}
           />
@@ -1507,7 +1933,7 @@ function Dashboard({ userId }) {
   );
 }
 
-function AuthPage({ register = false }) {
+function AuthPage({ register = false, offlinePreview = false }) {
   const navigate = useNavigate();
   const [message, setMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
@@ -1568,13 +1994,25 @@ function AuthPage({ register = false }) {
       <Link className="auth-workspace-link" to={register ? '/login' : '/register'}>
         {register ? 'Already have an account? Log in' : 'Need an account? Sign up'}
       </Link>
+      {offlinePreview && (
+        <p className="auth-workspace-link">
+          <Link to="/dashboard">Open the offline local preview</Link>
+        </p>
+      )}
     </main>
   );
 }
 
-function ProfileSettings({ user }) {
+function ProfileSettings({ user, offlinePreview = false, onOfflineProfileSave }) {
   const [displayName, setDisplayName] = useState(user.user_metadata?.display_name ?? '');
   const [bio, setBio] = useState(user.user_metadata?.bio ?? '');
+  const savedGoalType = user.user_metadata?.daily_goal_type;
+  const [dailyGoalType, setDailyGoalType] = useState(
+    ['none', 'words', 'minutes'].includes(savedGoalType) ? savedGoalType : 'none',
+  );
+  const [dailyGoalTarget, setDailyGoalTarget] = useState(
+    user.user_metadata?.daily_goal_target?.toString() ?? '500',
+  );
   const [status, setStatus] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [isSaving, setIsSaving] = useState(false);
@@ -1585,13 +2023,19 @@ function ProfileSettings({ user }) {
     setErrorMessage('');
     setIsSaving(true);
     try {
-      const { error } = await supabase.auth.updateUser({
-        data: {
-          display_name: displayName.trim() || null,
-          bio: bio.trim() || null,
-        },
-      });
-      if (error) throw error;
+      const profile = {
+        display_name: displayName.trim() || null,
+        bio: bio.trim() || null,
+        daily_goal_type: dailyGoalType,
+        daily_goal_target: dailyGoalType === 'none' ? null : Number(dailyGoalTarget),
+      };
+      if (offlinePreview) {
+        window.localStorage.setItem(LOCAL_PREVIEW_PROFILE_KEY, JSON.stringify(profile));
+        onOfflineProfileSave(profile);
+      } else {
+        const { error } = await supabase.auth.updateUser({ data: profile });
+        if (error) throw error;
+      }
       setStatus('Profile saved.');
     } catch (error) {
       console.error('Could not save profile settings.', error);
@@ -1603,12 +2047,21 @@ function ProfileSettings({ user }) {
 
   return (
     <main className="auth-page profile-page">
-      <span className="eyebrow">Your account</span>
+      {offlinePreview && (
+        <p className="local-preview-notice" role="status">
+          Offline preview: profile settings are saved only in this browser.
+        </p>
+      )}
+      <span className="eyebrow">{offlinePreview ? 'Local preview' : 'Your account'}</span>
       <h1>Profile settings</h1>
-      <p>Your display name personalizes your workspace link. Your bio is saved with your account and is not shown as a public profile.</p>
+      <p>
+        {offlinePreview
+          ? 'These settings are for this local preview and are not connected to an account.'
+          : 'Your display name personalizes your workspace link. Your bio is saved with your account and is not shown as a public profile.'}
+      </p>
       <form aria-label="Profile settings" className="auth-form profile-form" onSubmit={saveProfile}>
-        <label htmlFor="profile-email">Account email</label>
-        <input autoComplete="email" id="profile-email" readOnly value={user.email ?? ''} />
+        <label htmlFor="profile-email">{offlinePreview ? 'Account status' : 'Account email'}</label>
+        <input autoComplete={offlinePreview ? undefined : 'email'} id="profile-email" readOnly value={offlinePreview ? 'Offline — no account connected' : user.email ?? ''} />
         <label htmlFor="profile-display-name">Display name</label>
         <input
           autoComplete="name"
@@ -1628,8 +2081,38 @@ function ProfileSettings({ user }) {
           value={bio}
         />
         <span className="profile-character-count">{bio.length}/240</span>
+        <label htmlFor="profile-daily-goal">Daily writing goal</label>
+        <select
+          id="profile-daily-goal"
+          onChange={(event) => setDailyGoalType(event.target.value)}
+          value={dailyGoalType}
+        >
+          <option value="none">No daily goal</option>
+          <option value="words">Words written</option>
+          <option value="minutes">Time writing</option>
+        </select>
+        {dailyGoalType !== 'none' && (
+          <>
+            <label htmlFor="profile-daily-goal-target">
+              {dailyGoalType === 'words' ? 'Words per day' : 'Minutes per day'}
+            </label>
+            <input
+              id="profile-daily-goal-target"
+              max={dailyGoalType === 'words' ? 100000 : 1440}
+              min="1"
+              onChange={(event) => setDailyGoalTarget(event.target.value)}
+              required
+              type="number"
+              value={dailyGoalTarget}
+            />
+          </>
+        )}
+        <p className="profile-goal-help">
+          Word goals count net words added today across your stories. Time goals count while the writing editor is focused and this tab is visible. Daily progress is saved in this browser.
+        </p>
         <button className="cta-btn" disabled={isSaving} type="submit">{isSaving ? 'Saving…' : 'Save profile'}</button>
       </form>
+      {offlinePreview && <Link className="auth-workspace-link" to="/dashboard">Back to workspace</Link>}
       {status && <p className="profile-status" role="status">{status}</p>}
       {errorMessage && <p className="profile-status" role="alert">{errorMessage}</p>}
     </main>
@@ -1658,8 +2141,8 @@ function Footer() {
       content: (
         <>
           <p><strong>Prototype privacy notice · Updated 18 October 2026.</strong> This notice describes information handled when you visit or use Your Writing Platform. The prototype is hosted on GitHub Pages and uses Supabase for account authentication and cloud workspace storage. Applicable privacy requirements depend on where you and the project operator are located; this notice does not replace any rights or disclosures required by law.</p>
-          <p><strong>Information handled.</strong> When you register or sign in, Supabase Authentication processes your email address, password credentials, account identifier, and authentication/session data. The app does not store your password in its workspace table. If you add them in Profile settings, your display name and optional short bio are saved as account metadata in Supabase; they personalize your signed-in navigation and are not presented as a public profile. When signed in, your books, chapters, drafts, settings, characters, world details, notes, and scenes are saved as workspace data in the Supabase project and associated with your account identifier. If a browser has an older locally saved workspace, the app may read it and upload it to your account the first time it finds no cloud workspace.</p>
-          <p><strong>Browser storage and cookies.</strong> The app uses browser local storage for the Supabase sign-in session and may read an existing local workspace from an earlier version of the prototype. These are functional storage uses needed for sign-in and workspace continuity. The app does not intentionally use advertising, analytics, or cross-site tracking cookies. Your browser, GitHub Pages, Supabase, or other providers may use their own technical storage or logs to deliver, secure, and operate their services.</p>
+          <p><strong>Information handled.</strong> When you register or sign in, Supabase Authentication processes your email address, password credentials, account identifier, and authentication/session data. The app does not store your password in its workspace table. If you add them in Profile settings, your display name and optional short bio are saved as account metadata in Supabase; they personalize your signed-in navigation and are not presented as a public profile. When signed in, your books, chapters, drafts, settings, characters, world details, notes, scenes, and cover text are saved as workspace data in the Supabase project and associated with your account identifier. If you upload a book-cover image, it is stored in a private Supabase Storage bucket under your account. The app uses expiring signed URLs to display it; anyone with an active signed URL could access that image until the URL expires. In offline local preview, cover images are temporary and are not saved. If a browser has an older locally saved workspace, the app may read it and upload it to your account the first time it finds no cloud workspace.</p>
+          <p><strong>Browser storage and cookies.</strong> The app uses browser local storage for the Supabase sign-in session, daily writing-goal progress, and may read an existing local workspace from an earlier version of the prototype. These are functional storage uses needed for sign-in, goal tracking, and workspace continuity. Daily goal progress is stored on this browser and does not sync between devices. The app does not intentionally use advertising, analytics, or cross-site tracking cookies. Your browser, GitHub Pages, Supabase, or other providers may use their own technical storage or logs to deliver, secure, and operate their services.</p>
           <p><strong>Technical and third-party requests.</strong> GitHub Pages and Supabase receive the network requests needed to deliver the app, authenticate users, and save work; their infrastructure may process technical data such as IP address, browser/device information, and request timestamps for operation and security. The app loads Newsreader and DM Sans from Google Fonts, so Google receives a request for those font resources and related connection information. Each provider handles information under its own terms and privacy practices.</p>
           <p><strong>Purpose, access, and sharing.</strong> Information is used to provide sign-in, save and retrieve workspaces, maintain and secure the prototype, and respond to support or legal requests. The project operator and people with authorized Supabase project access may be able to access account and workspace data. Supabase and hosting providers process information to provide their services. The operator does not sell personal information or use it for advertising, and the prototype does not send promotional emails.</p>
           <p><strong>Retention and your choices.</strong> Workspace data remains in the Supabase project until it is deleted by the project operator or the associated account is removed; the prototype does not currently offer an in-app account or data deletion control. To ask about access, correction, or deletion, use the contact information on the project owner’s GitHub profile. Do not include passwords or private writing in a public issue. You can also stop using the service and clear this app’s browser storage, but clearing browser storage alone does not delete cloud data.</p>
@@ -1743,6 +2226,10 @@ function Footer() {
 function App() {
   const [session, setSession] = useState(null);
   const [authReady, setAuthReady] = useState(!supabase);
+  const [goalProgress, setGoalProgress] = useState(null);
+  const offlinePreview = import.meta.env.DEV && !supabase;
+  const [offlineProfile, setOfflineProfile] = useState(readLocalPreviewProfile);
+  const previewUser = { user_metadata: offlineProfile };
 
   useEffect(() => {
     if (!supabase) return undefined;
@@ -1769,36 +2256,70 @@ function App() {
 
   return (
     <Router>
-      <header><Navbar session={session} /></header>
+      <header><Navbar
+        goalProgress={goalProgress}
+        offlinePreview={offlinePreview}
+        session={session}
+      /></header>
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/dashboard" element={
           !authReady
             ? <main className="auth-page"><h1>Loading…</h1></main>
-            : session
-              ? <Dashboard key={session.user.id} userId={session.user.id} />
+            : offlinePreview
+              ? (
+                <Dashboard
+                  key="local-preview"
+                  offlinePreview
+                  onGoalProgress={setGoalProgress}
+                  userId="local-preview"
+                  userMetadata={offlineProfile}
+                />
+              )
+              : session
+              ? (
+                <Dashboard
+                  key={session.user.id}
+                  onGoalProgress={setGoalProgress}
+                  userId={session.user.id}
+                  userMetadata={session.user.user_metadata}
+                />
+              )
               : <Navigate to="/login" replace />
         } />
         <Route path="/profile" element={
           !authReady
             ? <main className="auth-page"><h1>Loading…</h1></main>
-            : session
+            : offlinePreview
+              ? (
+                <ProfileSettings
+                  key="local-preview-profile"
+                  offlinePreview
+                  onOfflineProfileSave={setOfflineProfile}
+                  user={previewUser}
+                />
+              )
+              : session
               ? <ProfileSettings key={session.user.id} user={session.user} />
               : <Navigate to="/login" replace />
         } />
         <Route path="/login" element={
           !authReady
             ? <main className="auth-page"><h1>Loading…</h1></main>
-            : session
+            : offlinePreview
               ? <Navigate to="/dashboard" replace />
-              : <AuthPage />
+              : session
+              ? <Navigate to="/dashboard" replace />
+              : <AuthPage offlinePreview={offlinePreview} />
         } />
         <Route path="/register" element={
           !authReady
             ? <main className="auth-page"><h1>Loading…</h1></main>
-            : session
+            : offlinePreview
               ? <Navigate to="/dashboard" replace />
-              : <AuthPage register />
+              : session
+              ? <Navigate to="/dashboard" replace />
+              : <AuthPage offlinePreview={offlinePreview} register />
         } />
         <Route path="*" element={
           !authReady

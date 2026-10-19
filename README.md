@@ -5,14 +5,16 @@ A React and Vite writing workspace. Signed-in users save one workspace per accou
 ## Configure Supabase
 
 1. Create a Supabase project and enable email/password authentication.
-2. In the Supabase SQL Editor, run [`supabase/schema.sql`](./supabase/schema.sql). It creates the workspace table and row-level security policies so authenticated users can only read and change their own workspace.
+2. In the Supabase SQL Editor, run [`supabase/schema.sql`](./supabase/schema.sql). It creates the workspace table and row-level security policies so authenticated users can only read and change their own workspace, plus a private `book-covers` Storage bucket limited to 5 MB JPEG, PNG, WebP, and AVIF images. Re-running the script does not delete workspaces or uploaded covers.
 3. Copy `.env.example` to `.env.local`, then set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` to the project URL and publishable/anon key from the Supabase project settings. These frontend values are public; never use a service-role key here.
 4. Set the Supabase authentication Site URL to `https://djshar.github.io/YourWritingPlatform/` and add that same URL to the allowed redirect URLs. Sign-up confirmation links explicitly redirect to the app's current origin and path.
-5. Start locally with `npm run dev`. Without the Supabase environment values, account screens report that cloud accounts are not configured.
+5. Start locally with `npm run dev`. If Supabase environment values are absent, local development opens an offline preview workspace. Its workspace and profile settings are saved only in that browser and never sync to Supabase. Production builds continue to require Supabase sign-in.
 
 On a user's first login, if no cloud workspace exists, the app imports that browser's existing local workspace and saves it to the signed-in account. A cloud workspace takes precedence on later logins.
 
-Signed-in users can edit a display name and optional short bio under **Profile settings**. These are saved to Supabase Auth user metadata; the display name appears in the workspace navigation, and the bio is not displayed publicly.
+Signed-in users can edit a display name, optional short bio, and optional daily writing goal (words or focused writing minutes) under **Profile settings**. These profile settings are saved to Supabase Auth user metadata; the display name appears in the workspace navigation, and the bio is not displayed publicly. Daily goal progress is stored in the current browser's local storage and does not sync between devices. Word goals measure net words added to the workspace since its first load that day; time goals count while the writing editor is focused and the tab is visible.
+
+Each story can have a subtitle, blurb, author name, and uploaded cover image. The story title is used as the cover title; its subtitle and author appear over the cover. The blurb is saved as story detail and previewed below the cover image, not printed over the cover. Cover text is saved with the existing workspace. Signed-in cover images are stored in the private Supabase Storage bucket under the owning user's ID, with row-level policies preventing other users from requesting images. The app displays covers with expiring signed URLs, so anyone with an active URL can view that image until the URL expires. Offline preview can display an uploaded image temporarily, but does not save it.
 
 ## Deploy to GitHub Pages
 
