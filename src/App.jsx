@@ -403,9 +403,11 @@ async function exportManuscript(book, format) {
     const { AlignmentType, Document, HeadingLevel, Packer, Paragraph, TextRun } = await import('docx');
     const font = book.editorFont === 'monospace'
       ? 'Courier New'
-      : book.editorFont === 'sans-serif'
+      : ['sans-serif', 'arial'].includes(book.editorFont)
         ? 'Arial'
-        : 'Georgia';
+        : book.editorFont === 'times-new-roman'
+          ? 'Times New Roman'
+          : 'Georgia';
     const children = [new Paragraph({ text: book.title, heading: HeadingLevel.TITLE })];
     chapters.forEach((chapter) => {
       children.push(new Paragraph({ text: chapter.title, heading: HeadingLevel.HEADING_1 }));
@@ -432,7 +434,7 @@ async function exportManuscript(book, format) {
     const pdf = new jsPDF();
     const bodyFont = book.editorFont === 'monospace'
       ? 'courier'
-      : book.editorFont === 'sans-serif'
+      : ['sans-serif', 'arial'].includes(book.editorFont)
         ? 'helvetica'
         : 'times';
     const margin = 20;
@@ -924,6 +926,8 @@ function WritingPanel({
     serif: 'var(--serif)',
     'sans-serif': 'var(--sans)',
     monospace: 'ui-monospace, SFMono-Regular, Consolas, monospace',
+    'times-new-roman': '"Times New Roman", Times, serif',
+    arial: 'Arial, Helvetica, sans-serif',
   };
 
   useLayoutEffect(() => {
@@ -1297,6 +1301,8 @@ function WritingPanel({
                 <select aria-label="Font family" onChange={(event) => onEditorFontChange(event.target.value)} value={editorFont}>
                   <option value="serif">Serif</option>
                   <option value="sans-serif">Sans-serif</option>
+                  <option value="times-new-roman">Times New Roman</option>
+                  <option value="arial">Arial</option>
                   <option value="monospace">Monospace</option>
                 </select>
               </label>
