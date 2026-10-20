@@ -1909,6 +1909,26 @@
   padding: 2px 5px;
 }
 
+.continuous-writing-option {
+  align-items: center;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 10px;
+  gap: 5px;
+}
+
+.continuous-writing-option input {
+  accent-color: var(--green);
+  margin: 0;
+}
+
+.continuous-writing-hint {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 8px 0;
+}
+
 .footer-close:hover {
   color: var(--ink);
 }
