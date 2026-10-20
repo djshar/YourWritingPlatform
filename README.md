@@ -14,6 +14,10 @@ On a user's first login, if no cloud workspace exists, the app imports that brow
 
 Signed-in users can edit a display name, optional short bio, and optional daily writing goal (words or focused writing minutes) under **Profile settings**. These profile settings are saved to Supabase Auth user metadata; the display name appears in the workspace navigation, and the bio is not displayed publicly. Daily goal progress is stored in the current browser's local storage and does not sync between devices. Word goals measure net words added to the workspace since its first load that day; time goals count while the writing editor is focused and the tab is visible.
 
+The workspace includes Light, Dark, and Sepia themes, plus Pestel pink, Stardust blue, and Lavender. Theme choices are saved with the user's workspace.
+
+Each chapter can contain multiple editable pages. Existing chapter text is preserved as Page 1 when the workspace is loaded; added pages begin empty. Pages and chapters can be deleted with confirmation, while each chapter keeps at least one page and each story keeps at least one chapter. Notes and highlights stay in Notes when their chapter is deleted. Chapter exports and word-goal counts include all pages in order.
+
 Each story can have a subtitle, blurb, author name, and uploaded cover image. The story title is used as the cover title; its subtitle and author appear over the cover. The blurb is saved as story detail and previewed below the cover image, not printed over the cover. Cover text is saved with the existing workspace. Signed-in cover images are stored in the private Supabase Storage bucket under the owning user's ID, with row-level policies preventing other users from requesting images. The app displays covers with expiring signed URLs, so anyone with an active URL can view that image until the URL expires. Offline preview can display an uploaded image temporarily, but does not save it.
 
 ## Deploy to GitHub Pages

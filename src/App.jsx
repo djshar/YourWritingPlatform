@@ -18,7 +18,7 @@ function countWords(text = '') {
 function getDailyWordCounts(workspace) {
   return Object.fromEntries(workspace.books.flatMap((book) => book.chapters.map((chapter) => [
     `${book.id}:${chapter.id}`,
-    countWords(chapter.content ?? ''),
+    countWords((chapter.pages ?? [{ content: chapter.content ?? '' }]).map((page) => page.content ?? '').join('\n')),
   ])));
 }
 
@@ -82,6 +82,7 @@ function makeGoalProgress(goal, dailyState, wordCounts) {
 }
 
 function createBook(id, title) {
+  const chapterId = `${id}-chapter-1`;
   return {
     id,
     title,
@@ -89,8 +90,14 @@ function createBook(id, title) {
     blurb: '',
     authorName: '',
     coverImagePath: '',
-    chapters: [{ id: `${id}-chapter-1`, title: 'Chapter 1', content: '' }],
-    activeChapterId: `${id}-chapter-1`,
+    chapters: [{
+      id: chapterId,
+      title: 'Chapter 1',
+      content: '',
+      pages: [{ id: `${chapterId}-page-1`, content: '', contentHtml: '' }],
+    }],
+    activeChapterId: chapterId,
+    activePageId: `${chapterId}-page-1`,
     editorFont: 'serif',
     editorFontSize: 16,
     spellCheck: true,
@@ -118,10 +125,36 @@ function normalizeBook(book, index) {
   normalized.editorFontSize = recommendedFontSizes.reduce((closest, size) => (
     Math.abs(size - normalizedFontSize) < Math.abs(closest - normalizedFontSize) ? size : closest
   ), recommendedFontSizes[0]);
-  normalized.chapters = Array.isArray(book.chapters) ? book.chapters : fallback.chapters;
+  const savedChapters = Array.isArray(book.chapters) ? book.chapters : fallback.chapters;
+  normalized.chapters = savedChapters.map((chapter, chapterIndex) => {
+    const chapterId = typeof chapter.id === 'string' ? chapter.id : `${fallback.id}-chapter-${chapterIndex + 1}`;
+    const pages = Array.isArray(chapter.pages) && chapter.pages.length
+      ? chapter.pages.map((page, pageIndex) => ({
+        ...page,
+        id: typeof page.id === 'string' ? page.id : `${chapterId}-page-${pageIndex + 1}`,
+        content: typeof page.content === 'string' ? page.content : '',
+        contentHtml: typeof page.contentHtml === 'string' ? page.contentHtml : '',
+      }))
+      : [{
+        id: `${chapterId}-page-1`,
+        content: typeof chapter.content === 'string' ? chapter.content : '',
+        contentHtml: typeof chapter.contentHtml === 'string' ? chapter.contentHtml : '',
+      }];
+    return {
+      ...chapter,
+      id: chapterId,
+      pages,
+      content: pages[0].content,
+      contentHtml: pages[0].contentHtml,
+    };
+  });
   normalized.activeChapterId = normalized.chapters.some((chapter) => chapter.id === book.activeChapterId)
     ? book.activeChapterId
     : normalized.chapters[0]?.id ?? null;
+  const activeChapter = normalized.chapters.find((chapter) => chapter.id === normalized.activeChapterId);
+  normalized.activePageId = activeChapter?.pages.some((page) => page.id === book.activePageId)
+    ? book.activePageId
+    : activeChapter?.pages[0]?.id ?? null;
   normalized.characters = Array.isArray(book.characters) ? book.characters : [];
   normalized.world = Array.isArray(book.world) ? book.world : [];
   normalized.notes = Array.isArray(book.notes) ? book.notes : [];
@@ -140,7 +173,9 @@ function migrateWorkspace(saved) {
     return {
       books,
       activeBookId: books.some((book) => book.id === saved.activeBookId) ? saved.activeBookId : books[0].id,
-      theme: ['light', 'dark', 'sepia'].includes(saved.theme) ? saved.theme : 'sepia',
+      theme: ['light', 'dark', 'sepia', 'pestel', 'stardust', 'lavender'].includes(saved.theme)
+        ? saved.theme
+        : 'sepia',
     };
   }
 
@@ -333,10 +368,10 @@ function editorHtmlToPlainText(html) {
   }).join('\n');
 }
 
-function getChapterParagraphs(chapter) {
-  const html = chapter.contentHtml
-    ? sanitizeEditorHtml(chapter.contentHtml)
-    : plainTextToEditorHtml(chapter.content ?? '');
+function getContentParagraphs(content) {
+  const html = content.contentHtml
+    ? sanitizeEditorHtml(content.contentHtml)
+    : plainTextToEditorHtml(content.content ?? '');
   const parsed = new DOMParser().parseFromString(html, 'text/html');
   return [...parsed.body.children].map((paragraph) => ({
     text: textFromEditorNode(paragraph),
@@ -348,6 +383,14 @@ function getChapterParagraphs(chapter) {
       : '1.5',
     indent: Math.min(8, Math.max(0, Number.parseFloat(paragraph.style.textIndent) || 0)),
   }));
+}
+
+function getChapterParagraphs(chapter) {
+  return (chapter.pages ?? [chapter]).flatMap(getContentParagraphs);
+}
+
+function getChapterPlainText(chapter) {
+  return (chapter.pages ?? [chapter]).map((page) => page.content ?? '').join('\n');
 }
 
 function getTextOffsets(root, range) {
@@ -390,7 +433,7 @@ async function exportManuscript(book, format) {
   const chapters = book.chapters.map((chapter, index) => ({
     source: chapter,
     title: chapter.title?.trim() || `Chapter ${index + 1}`,
-    content: chapter.content ?? '',
+    content: getChapterPlainText(chapter),
   }));
 
   if (format === 'txt') {
@@ -540,7 +583,7 @@ function workspaceLinkLabel(user) {
   return name ? `${name}'s workspace` : 'My workspace';
 }
 
-function Navbar({ session, goalProgress, offlinePreview = false }) {
+function Navbar({ session, offlinePreview = false }) {
   const [signOutError, setSignOutError] = useState('');
 
   const signOut = async () => {
@@ -562,21 +605,6 @@ function Navbar({ session, goalProgress, offlinePreview = false }) {
           <>
             <li className="nav-profile-item">
               <Link to="/dashboard">{offlinePreview ? 'Local preview workspace' : workspaceLinkLabel(session.user)}</Link>
-              {goalProgress && (
-                <div className="nav-goal-progress">
-                  <div
-                    aria-label={`Daily writing goal ${goalProgress.percent}% complete`}
-                    aria-valuemax={100}
-                    aria-valuemin={0}
-                    aria-valuenow={goalProgress.percent}
-                    className="nav-goal-progress-track"
-                    role="progressbar"
-                  >
-                    <span style={{ width: `${goalProgress.percent}%` }} />
-                  </div>
-                  <span>{goalProgress.percent}% complete · {goalProgress.label}</span>
-                </div>
-              )}
             </li>
             <li><Link to="/profile">Profile settings</Link></li>
             {offlinePreview
@@ -876,8 +904,10 @@ function BookCoverEditor({ activeBook, userId, offlinePreview, onUpdateBook }) {
 function WritingPanel({
   books,
   activeBook,
+  goalProgress,
   chapters,
   activeChapter,
+  activePage,
   spellCheck,
   onConvertDraft,
   onExportManuscript,
@@ -895,6 +925,11 @@ function WritingPanel({
   onEditorFontChange,
   onEditorFontSizeChange,
   onChapterChange,
+  onDeleteChapter,
+  onPageChange,
+  onAddPage,
+  onDeletePage,
+  onUpdatePage,
   onSpellCheckChange,
   onCreateHighlight,
   onAddChapter,
@@ -905,19 +940,15 @@ function WritingPanel({
 }) {
   const manuscriptRef = useRef(null);
   const selectedRangeRef = useRef(null);
-  const initialEditorHtmlRef = useRef(null);
-  if (initialEditorHtmlRef.current === null) {
-    initialEditorHtmlRef.current = activeChapter
-      ? activeChapter.contentHtml
-        ? sanitizeEditorHtml(activeChapter.contentHtml)
-        : plainTextToEditorHtml(activeChapter.content ?? '')
-      : '<p><br></p>';
-  }
+  const [expandedChapterIds, setExpandedChapterIds] = useState(() => (
+    activeChapter ? [activeChapter.id] : []
+  ));
   const [hasSelection, setHasSelection] = useState(false);
-  const [editorCounts, setEditorCounts] = useState(() => ({
-    words: countWords(activeChapter?.content ?? ''),
-    characters: (activeChapter?.content ?? '').replace(/\r?\n/g, '').length,
-  }));
+  const editorCounts = {
+    words: countWords(activePage?.content ?? ''),
+    characters: (activePage?.content ?? '').replace(/\r?\n/g, '').length,
+  };
+  const previousPageIdRef = useRef(null);
   const [selectedAlignment, setSelectedAlignment] = useState('left');
   const [selectedLineSpacing, setSelectedLineSpacing] = useState('1.5');
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
@@ -931,11 +962,17 @@ function WritingPanel({
   };
 
   useLayoutEffect(() => {
+    if (previousPageIdRef.current === activePage?.id) return;
+    previousPageIdRef.current = activePage?.id;
     const editor = manuscriptRef.current;
     if (!editor) return;
-    editor.innerHTML = initialEditorHtmlRef.current;
+    const html = activePage?.contentHtml
+      ? sanitizeEditorHtml(activePage.contentHtml)
+      : plainTextToEditorHtml(activePage?.content ?? '');
+    editor.innerHTML = html;
     selectedRangeRef.current = null;
-  }, []);
+    window.getSelection()?.removeAllRanges();
+  }, [activePage?.id, activePage?.content, activePage?.contentHtml]);
 
   const captureSelection = useCallback(() => {
     const editor = manuscriptRef.current;
@@ -974,11 +1011,11 @@ function WritingPanel({
 
   const saveEditorFormatting = () => {
     const editor = manuscriptRef.current;
-    if (!editor || !activeChapter) return;
+    if (!editor || !activeChapter || !activePage) return;
     const html = sanitizeEditorHtml(editor.innerHTML);
     if (editor.innerHTML !== html) editor.innerHTML = html;
-    onUpdateChapter(activeChapter.id, 'content', editorHtmlToPlainText(html));
-    onUpdateChapter(activeChapter.id, 'contentHtml', html);
+    onUpdatePage(activeChapter.id, activePage.id, 'content', editorHtmlToPlainText(html));
+    onUpdatePage(activeChapter.id, activePage.id, 'contentHtml', html);
   };
 
   const applyParagraphStyle = (styleName, value) => {
@@ -1087,33 +1124,24 @@ function WritingPanel({
 
   const handleEditorInput = () => {
     const editor = manuscriptRef.current;
-    if (!editor || !activeChapter) return;
+    if (!editor || !activeChapter || !activePage) return;
     const html = sanitizeEditorHtml(editor.innerHTML);
     if (editor.innerHTML !== html) editor.innerHTML = html;
     const text = editorHtmlToPlainText(html);
-    updateEditorCounts(text);
     const hasText = Boolean(text.trim());
     editor.classList.toggle('manuscript-empty', !hasText);
     editor.dataset.empty = String(!hasText);
-    onUpdateChapter(activeChapter.id, 'content', text);
-    onUpdateChapter(activeChapter.id, 'contentHtml', html);
+    onUpdatePage(activeChapter.id, activePage.id, 'content', text);
+    onUpdatePage(activeChapter.id, activePage.id, 'contentHtml', html);
     selectedRangeRef.current = null;
     setHasSelection(false);
-  };
-
-  const updateEditorCounts = (text) => {
-    const counts = {
-      words: countWords(text),
-      characters: text.replace(/\r?\n/g, '').length,
-    };
-    setEditorCounts(counts);
   };
 
   const handleEditorPaste = (event) => {
     event.preventDefault();
     const editor = event.currentTarget;
     const selection = window.getSelection();
-    if (!editor || !activeChapter) return;
+    if (!editor || !activeChapter || !activePage) return;
     const pastedText = event.clipboardData?.getData('text/plain') ?? '';
     if (!pastedText) return;
 
@@ -1261,16 +1289,86 @@ function WritingPanel({
         )}
         <div className="chapter-list">
           {chapters.map((chapter, index) => (
-            <button
-              aria-current={chapter.id === activeChapter?.id ? 'page' : undefined}
-              className={`chapter-item ${chapter.id === activeChapter?.id ? 'chapter-active' : ''}`}
-              key={chapter.id}
-              onClick={() => onChapterChange(chapter.id)}
-              type="button"
-            >
-              <span className="chapter-number">{String(index + 1).padStart(2, '0')}</span>
-              <span className="chapter-name">{chapter.title || `Chapter ${index + 1}`}</span>
-            </button>
+            <div className="chapter-entry" key={chapter.id}>
+              <div className="chapter-row">
+                <button
+                  aria-current={chapter.id === activeChapter?.id ? 'page' : undefined}
+                  className={`chapter-item ${chapter.id === activeChapter?.id ? 'chapter-active' : ''}`}
+                  onClick={() => onChapterChange(chapter.id)}
+                  type="button"
+                >
+                  <span className="chapter-number">{String(index + 1).padStart(2, '0')}</span>
+                  <span className="chapter-name">{chapter.title || `Chapter ${index + 1}`}</span>
+                </button>
+                <button
+                  aria-label={`Add page to ${chapter.title || `Chapter ${index + 1}`}`}
+                  className="chapter-add-page"
+                  onClick={() => {
+                    onAddPage(chapter.id);
+                    setExpandedChapterIds((current) => current.includes(chapter.id)
+                      ? current
+                      : [...current, chapter.id]);
+                  }}
+                  title="Add a page"
+                  type="button"
+                >
+                  +
+                </button>
+                <button
+                  aria-label={`Delete ${chapter.title || `Chapter ${index + 1}`}`}
+                  className="chapter-delete"
+                  disabled={chapters.length <= 1}
+                  onClick={() => {
+                    onDeleteChapter(chapter.id);
+                    setExpandedChapterIds((current) => current.filter((chapterId) => chapterId !== chapter.id));
+                  }}
+                  title={chapters.length <= 1 ? 'A story must have at least one chapter' : `Delete ${chapter.title || `Chapter ${index + 1}`}`}
+                  type="button"
+                >
+                  ×
+                </button>
+                <button
+                  aria-expanded={expandedChapterIds.includes(chapter.id)}
+                  aria-label={`${expandedChapterIds.includes(chapter.id) ? 'Collapse' : 'Expand'} pages for ${chapter.title || `Chapter ${index + 1}`}`}
+                  className="chapter-expand-pages"
+                  onClick={() => setExpandedChapterIds((current) => (
+                    current.includes(chapter.id)
+                      ? current.filter((chapterId) => chapterId !== chapter.id)
+                      : [...current, chapter.id]
+                  ))}
+                  title={`${expandedChapterIds.includes(chapter.id) ? 'Collapse' : 'Expand'} pages`}
+                  type="button"
+                >
+                  {expandedChapterIds.includes(chapter.id) ? '⌄' : '›'}
+                </button>
+              </div>
+              {expandedChapterIds.includes(chapter.id) && (
+                <div className="chapter-pages" aria-label={`Pages in ${chapter.title || `Chapter ${index + 1}`}`}>
+                  {chapter.pages.map((page, pageIndex) => (
+                    <div className="chapter-page-row" key={page.id}>
+                      <button
+                        aria-current={page.id === activePage?.id ? 'page' : undefined}
+                        className={`chapter-page-item ${page.id === activePage?.id ? 'chapter-page-active' : ''}`}
+                        onClick={() => onPageChange(chapter.id, page.id)}
+                        type="button"
+                      >
+                        Page {pageIndex + 1}
+                      </button>
+                      <button
+                        aria-label={`Delete Page ${pageIndex + 1}`}
+                        className="chapter-page-delete"
+                        disabled={chapter.pages.length <= 1}
+                        onClick={() => onDeletePage(chapter.id, page.id)}
+                        title={chapter.pages.length <= 1 ? 'A chapter must have at least one page' : `Delete Page ${pageIndex + 1}`}
+                        type="button"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           ))}
         </div>
         <button className="add-chapter-button" onClick={onAddChapter} type="button">＋ Add a chapter</button>
@@ -1414,6 +1512,7 @@ function WritingPanel({
                       start,
                       end,
                       chapterId: activeChapter.id,
+                      pageId: activePage.id,
                       chapterTitle: activeChapter.title || 'Untitled chapter',
                     });
                   }
@@ -1427,10 +1526,14 @@ function WritingPanel({
             <div
               aria-label="Chapter content"
               aria-multiline="true"
-              className={`manuscript-input ${activeChapter.content ? '' : 'manuscript-empty'}`}
+              className={`manuscript-input ${activePage?.content ? '' : 'manuscript-empty'}`}
               contentEditable
-              data-placeholder="The first sentence is yours. Start wherever the story begins…"
-              data-empty={activeChapter.content ? 'false' : 'true'}
+              data-placeholder={
+                activeChapter.id === activeBook.chapters[0]?.id && activePage?.id === activeChapter.pages[0]?.id
+                  ? 'Start creating your world here…'
+                  : ''
+              }
+              data-empty={activePage?.content ? 'false' : 'true'}
               onKeyDown={handleEditorKeyDown}
               onInput={handleEditorInput}
               onMouseUp={captureSelection}
@@ -1447,24 +1550,56 @@ function WritingPanel({
               suppressContentEditableWarning
             />
             <div className="writing-footer">
-              <span title="Character count includes spaces and punctuation; line breaks are excluded">
-                {`${editorCounts.words} words · ${editorCounts.characters} characters`}
-              </span>
+              <div className="writing-footer-progress">
+                <span title="Character count includes spaces and punctuation; line breaks are excluded">
+                  {`${editorCounts.words} words · ${editorCounts.characters} characters`}
+                </span>
+                {goalProgress && (
+                  <div className="writing-goal-progress">
+                    <div className="writing-goal-progress-heading">
+                      <span>Daily writing goal</span>
+                      <span>{goalProgress.percent}%</span>
+                    </div>
+                    <div
+                      aria-label={`Daily writing goal ${goalProgress.percent}% complete`}
+                      aria-valuemax={100}
+                      aria-valuemin={0}
+                      aria-valuenow={goalProgress.percent}
+                      className="writing-goal-progress-track"
+                      role="progressbar"
+                    >
+                      <span style={{ width: `${goalProgress.percent}%` }} />
+                    </div>
+                    <span className="writing-goal-progress-label">{goalProgress.label}</span>
+                  </div>
+                )}
+              </div>
               <div className="writing-footer-actions">
-                <button
-                  className="clear-button"
-                  onClick={() => {
-                    if (manuscriptRef.current) manuscriptRef.current.innerHTML = '<p><br></p>';
-                    selectedRangeRef.current = null;
-                    setHasSelection(false);
-                    setEditorCounts({ words: 0, characters: 0 });
-                    onUpdateChapter(activeChapter.id, 'content', '');
-                    onUpdateChapter(activeChapter.id, 'contentHtml', '');
-                  }}
-                  type="button"
-                >
-                  Clear chapter
-                </button>
+                <div className="writing-footer-buttons">
+                  <button
+                    className="new-page-button"
+                    onClick={() => onAddPage(activeChapter.id)}
+                    type="button"
+                  >
+                    ＋ New page
+                  </button>
+                  <button
+                    className="clear-button"
+                    onClick={() => {
+                      if (manuscriptRef.current) manuscriptRef.current.innerHTML = '<p><br></p>';
+                      selectedRangeRef.current = null;
+                      setHasSelection(false);
+                      onUpdatePage(activeChapter.id, activePage.id, 'content', '');
+                      onUpdatePage(activeChapter.id, activePage.id, 'contentHtml', '');
+                    }}
+                    type="button"
+                  >
+                    Clear page
+                  </button>
+                </div>
+                <span className="active-page-number">
+                  Page {Math.max(1, activeChapter.pages.findIndex((page) => page.id === activePage?.id) + 1)}
+                </span>
                 {exportStatus && <span className="export-status" role="status">{exportStatus}</span>}
               </div>
             </div>
@@ -1486,6 +1621,9 @@ function ThemeSwitch({ theme, onChange }) {
     { value: 'light', label: 'Light', icon: '☼' },
     { value: 'dark', label: 'Dark', icon: '☾' },
     { value: 'sepia', label: 'Sepia', icon: '◒' },
+    { value: 'pestel', label: 'Pestel', swatch: '#F8C8DC' },
+    { value: 'stardust', label: 'Stardust', swatch: '#E1F6FF' },
+    { value: 'lavender', label: 'Lavender', swatch: '#E6E5FA' },
   ];
 
   return (
@@ -1500,7 +1638,11 @@ function ThemeSwitch({ theme, onChange }) {
           title={`${option.label} mode`}
           type="button"
         >
-          <span aria-hidden="true">{option.icon}</span>
+          {option.swatch ? (
+            <span aria-hidden="true" className="theme-option-swatch" style={{ backgroundColor: option.swatch }} />
+          ) : (
+            <span aria-hidden="true">{option.icon}</span>
+          )}
           <span className="theme-option-label">{option.label}</span>
         </button>
       ))}
@@ -1508,7 +1650,7 @@ function ThemeSwitch({ theme, onChange }) {
   );
 }
 
-function Dashboard({ userId, userMetadata, onGoalProgress, offlinePreview = false }) {
+function Dashboard({ userId, userMetadata, onGoalProgress, goalProgress, offlinePreview = false }) {
   const [workspace, setWorkspace] = useState(initialWorkspace);
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
@@ -1714,6 +1856,7 @@ function Dashboard({ userId, userMetadata, onGoalProgress, offlinePreview = fals
       || activeTab !== 'write'
       || activeBook.id !== pending.bookId
       || activeBook.activeChapterId !== pending.chapterId
+      || activeBook.activePageId !== pending.pageId
     ) return undefined;
 
     const frame = window.requestAnimationFrame(() => {
@@ -1740,7 +1883,7 @@ function Dashboard({ userId, userMetadata, onGoalProgress, offlinePreview = fals
     });
 
     return () => window.cancelAnimationFrame(frame);
-  }, [activeBook.id, activeBook.activeChapterId, activeTab]);
+  }, [activeBook.id, activeBook.activeChapterId, activeBook.activePageId, activeTab]);
 
   const addBook = (event) => {
     event.preventDefault();
@@ -1760,9 +1903,93 @@ function Dashboard({ userId, userMetadata, onGoalProgress, offlinePreview = fals
 
   const addChapter = () => {
     updateActiveBook((current) => {
-      const chapter = { id: `${current.id}-chapter-${Date.now()}`, title: `Chapter ${current.chapters.length + 1}`, content: '' };
-      return { ...current, chapters: [...current.chapters, chapter], activeChapterId: chapter.id };
+      const chapterId = `${current.id}-chapter-${Date.now()}`;
+      const page = { id: `${chapterId}-page-1`, content: '', contentHtml: '' };
+      const chapter = {
+        id: chapterId,
+        title: `Chapter ${current.chapters.length + 1}`,
+        content: '',
+        contentHtml: '',
+        pages: [page],
+      };
+      return {
+        ...current,
+        chapters: [...current.chapters, chapter],
+        activeChapterId: chapter.id,
+        activePageId: page.id,
+      };
     });
+  };
+
+  const deleteChapter = (chapterId) => {
+    const chapterIndex = activeBook.chapters.findIndex((chapter) => chapter.id === chapterId);
+    if (chapterIndex < 0 || activeBook.chapters.length <= 1) return;
+    const chapter = activeBook.chapters[chapterIndex];
+    const title = chapter.title?.trim() || `Chapter ${chapterIndex + 1}`;
+    if (!window.confirm(`Delete "${title}" and all ${chapter.pages.length} of its pages? This cannot be undone. Notes and highlights will stay in Notes.`)) return;
+
+    const chapters = activeBook.chapters.filter((item) => item.id !== chapterId);
+    const nextChapter = activeBook.activeChapterId === chapterId
+      ? chapters[Math.min(chapterIndex, chapters.length - 1)]
+      : null;
+    updateActiveBook((current) => ({
+      ...current,
+      chapters: current.chapters.filter((item) => item.id !== chapterId),
+      ...(nextChapter
+        ? { activeChapterId: nextChapter.id, activePageId: nextChapter.pages[0]?.id }
+        : {}),
+    }));
+  };
+
+  const addPage = (chapterId) => {
+    updateActiveBook((current) => {
+      const chapter = current.chapters.find((item) => item.id === chapterId);
+      if (!chapter) return current;
+      const page = {
+        id: `${chapter.id}-page-${Date.now()}`,
+        content: '',
+        contentHtml: '',
+      };
+      return {
+        ...current,
+        chapters: current.chapters.map((item) => item.id === chapterId
+          ? { ...item, pages: [...item.pages, page] }
+          : item),
+        activeChapterId: chapter.id,
+        activePageId: page.id,
+      };
+    });
+  };
+
+  const deletePage = (chapterId, pageId) => {
+    const chapter = activeBook.chapters.find((item) => item.id === chapterId);
+    if (!chapter || chapter.pages.length <= 1) return;
+    const pageIndex = chapter.pages.findIndex((page) => page.id === pageId);
+    if (pageIndex < 0) return;
+    if (!window.confirm(`Delete Page ${pageIndex + 1}? This cannot be undone.`)) return;
+
+    updateActiveBook((current) => ({
+      ...current,
+      chapters: current.chapters.map((item) => {
+        if (item.id !== chapterId || item.pages.length <= 1) return item;
+        const currentPageIndex = item.pages.findIndex((page) => page.id === pageId);
+        if (currentPageIndex < 0) return item;
+        const pages = item.pages.filter((page) => page.id !== pageId);
+        const firstPage = pages[0];
+        return {
+          ...item,
+          pages,
+          content: firstPage.content,
+          contentHtml: firstPage.contentHtml,
+        };
+      }),
+      ...(current.activeChapterId === chapterId && current.activePageId === pageId
+        ? {
+          activePageId: chapter.pages
+            .filter((page) => page.id !== pageId)[Math.min(pageIndex, chapter.pages.length - 2)]?.id,
+        }
+        : {}),
+    }));
   };
 
   const updateChapter = (id, field, value) => {
@@ -1772,7 +1999,23 @@ function Dashboard({ userId, userMetadata, onGoalProgress, offlinePreview = fals
     }));
   };
 
-  const createHighlight = ({ excerpt, start, end, chapterId, chapterTitle }) => {
+  const updatePage = (chapterId, pageId, field, value) => {
+    updateActiveBook((current) => ({
+      ...current,
+      chapters: current.chapters.map((chapter) => {
+        if (chapter.id !== chapterId) return chapter;
+        const pages = chapter.pages.map((page) => page.id === pageId ? { ...page, [field]: value } : page);
+        const firstPage = pages[0];
+        return {
+          ...chapter,
+          pages,
+          ...(firstPage?.id === pageId ? { [field]: value } : {}),
+        };
+      }),
+    }));
+  };
+
+  const createHighlight = ({ excerpt, start, end, chapterId, pageId, chapterTitle }) => {
     const note = {
       id: `highlight-${Date.now()}`,
       title: `Review: ${excerpt.trim().slice(0, 48)}${excerpt.trim().length > 48 ? '…' : ''}`,
@@ -1783,6 +2026,7 @@ function Dashboard({ userId, userMetadata, onGoalProgress, offlinePreview = fals
       start,
       end,
       chapterId,
+      pageId,
       chapterTitle,
     };
     updateActiveBook((current) => ({ ...current, notes: [...current.notes, note] }));
@@ -1795,15 +2039,18 @@ function Dashboard({ userId, userMetadata, onGoalProgress, offlinePreview = fals
     pendingReviewRef.current = {
       bookId: activeBook.id,
       chapterId: chapter.id,
+      pageId: note.pageId ?? chapter.pages[0]?.id,
       start: note.start,
       end: note.end,
       excerpt: note.excerpt,
     };
-    updateActiveBook({ activeChapterId: chapter.id });
+    updateActiveBook({ activeChapterId: chapter.id, activePageId: note.pageId ?? chapter.pages[0]?.id });
     setActiveTab('write');
   };
 
   const activeChapter = activeBook.chapters.find((chapter) => chapter.id === activeBook.activeChapterId);
+  const activePage = activeChapter?.pages.find((page) => page.id === activeBook.activePageId)
+    ?? activeChapter?.pages[0];
   const collectionKey = activeTab === 'storyboard' ? 'scenes' : activeTab;
   const config = collections[collectionKey];
 
@@ -1893,9 +2140,11 @@ function Dashboard({ userId, userMetadata, onGoalProgress, offlinePreview = fals
       <div aria-labelledby={`tab-${activeTab}`} className="workspace-tabpanel" id="workspace-tabpanel" role="tabpanel">
         {activeTab === 'write' ? (
           <WritingPanel
-            key={`${activeBook.id}-${activeChapter?.id ?? 'empty'}`}
+            key={activeBook.id}
             activeBook={activeBook}
+            goalProgress={goalProgress}
             activeChapter={activeChapter}
+            activePage={activePage}
             books={workspace.books}
             chapters={activeBook.chapters}
             editorFont={activeBook.editorFont ?? initialBook.editorFont}
@@ -1908,7 +2157,17 @@ function Dashboard({ userId, userMetadata, onGoalProgress, offlinePreview = fals
             onAddBookSubmit={addBook}
             onBookChange={switchBook}
             onCancelAddBook={() => { setIsAddingBook(false); setNewBookTitle(''); }}
-            onChapterChange={(id) => updateActiveBook({ activeChapterId: id })}
+            onChapterChange={(id) => {
+              const chapter = activeBook.chapters.find((item) => item.id === id);
+              updateActiveBook({ activeChapterId: id, activePageId: chapter?.pages[0]?.id });
+            }}
+            onDeleteChapter={deleteChapter}
+            onPageChange={(chapterId, pageId) => updateActiveBook({
+              activeChapterId: chapterId,
+              activePageId: pageId,
+            })}
+            onAddPage={addPage}
+            onDeletePage={deletePage}
             onEditorFontChange={(editorFont) => updateActiveBook({ editorFont })}
             onEditorFontSizeChange={(editorFontSize) => updateActiveBook({ editorFontSize })}
             onSpellCheckChange={(spellCheck) => updateActiveBook({ spellCheck })}
@@ -1917,6 +2176,7 @@ function Dashboard({ userId, userMetadata, onGoalProgress, offlinePreview = fals
             onCreateHighlight={createHighlight}
             onNewBookTitleChange={setNewBookTitle}
             onUpdateChapter={updateChapter}
+            onUpdatePage={updatePage}
             onUpdateBook={updateBook}
             userId={userId}
             offlinePreview={offlinePreview}
@@ -2262,11 +2522,7 @@ function App() {
 
   return (
     <Router>
-      <header><Navbar
-        goalProgress={goalProgress}
-        offlinePreview={offlinePreview}
-        session={session}
-      /></header>
+      <header><Navbar offlinePreview={offlinePreview} session={session} /></header>
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/dashboard" element={
@@ -2277,6 +2533,7 @@ function App() {
                 <Dashboard
                   key="local-preview"
                   offlinePreview
+                  goalProgress={goalProgress}
                   onGoalProgress={setGoalProgress}
                   userId="local-preview"
                   userMetadata={offlineProfile}
@@ -2286,6 +2543,7 @@ function App() {
               ? (
                 <Dashboard
                   key={session.user.id}
+                  goalProgress={goalProgress}
                   onGoalProgress={setGoalProgress}
                   userId={session.user.id}
                   userMetadata={session.user.user_metadata}
