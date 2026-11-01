@@ -1,0 +1,203 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap');
+
+:root {
+  --sans: 'DM Sans', 'Segoe UI', sans-serif;
+  --serif: 'Newsreader', Georgia, serif;
+  --ink: #352f27;
+  --muted: #766e62;
+  --green: #49684d;
+  --green-dark: #3d583f;
+  --focus: #78917b;
+  --paper: #f3ecdf;
+  --surface: #fcf8ef;
+  --surface-soft: #f7f0e4;
+  --line: #e3d9c8;
+  --line-soft: #ebe2d4;
+  --highlight: #f0e2bc;
+  --highlight-ink: #59461f;
+  color-scheme: light;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-synthesis: none;
+  font-weight: 400;
+  text-rendering: optimizeLegibility;
+
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-font-smoothing: antialiased;
+}
+
+:root[data-theme='light'] {
+  --ink: #30332d;
+  --muted: #6d736a;
+  --green: #49684d;
+  --green-dark: #38543c;
+  --focus: #647e68;
+  --paper: #f7f7f3;
+  --surface: #fff;
+  --surface-soft: #f1f2ed;
+  --line: #e2e4dc;
+  --line-soft: #e9eae4;
+  --highlight: #f4eabf;
+  --highlight-ink: #59461f;
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --ink: #eee8dc;
+  --muted: #b3ad9f;
+  --green: #a6c39b;
+  --green-dark: #c0d5b8;
+  --focus: #a6c39b;
+  --paper: #20211e;
+  --surface: #292a26;
+  --surface-soft: #242521;
+  --line: #46463f;
+  --line-soft: #393a34;
+  --highlight: #50472f;
+  --highlight-ink: #f1dfad;
+  color-scheme: dark;
+}
+
+:root[data-theme='pastel'] {
+  --ink: #392733;
+  --muted: #6b5361;
+  --green: #80516a;
+  --green-dark: #6c4058;
+  --focus: #a65379;
+  --paper: #F8C8DC;
+  --surface: #fff4f8;
+  --surface-soft: #fbe3ec;
+  --line: #e8b5c9;
+  --line-soft: #f0cbd9;
+  --highlight: #f4b6ce;
+  --highlight-ink: #48283a;
+  color-scheme: light;
+}
+
+:root[data-theme='red-white'] {
+  --ink: #3b1d1d;
+  --muted: #7a4d4d;
+  --green: #a43d3d;
+  --green-dark: #7d2d2d;
+  --focus: #d16666;
+  --paper: #fff1f1;
+  --surface: #fffaf7;
+  --surface-soft: #f9e2e2;
+  --line: #e7c2c2;
+  --line-soft: #f2d7d7;
+  --highlight: #f3c1bf;
+  --highlight-ink: #4a1b1b;
+  color-scheme: light;
+}
+
+:root[data-theme='red-black'] {
+  --ink: #f7e7e7;
+  --muted: #d3b5b5;
+  --green: #f04f4f;
+  --green-dark: #ff7b7b;
+  --focus: #ff9a9a;
+  --paper: #190d0d;
+  --surface: #231313;
+  --surface-soft: #2d1a1a;
+  --line: #4f2a2a;
+  --line-soft: #5f3434;
+  --highlight: #7d2d2d;
+  --highlight-ink: #ffe1e1;
+  color-scheme: dark;
+}
+
+:root[data-theme='dark-grey-white'] {
+  --ink: #f3f3f3;
+  --muted: #d1d1d1;
+  --green: #b8b8b8;
+  --green-dark: #d7d7d7;
+  --focus: #ffffff;
+  --paper: #2d2d2d;
+  --surface: #383838;
+  --surface-soft: #404040;
+  --line: #595959;
+  --line-soft: #686868;
+  --highlight: #6d6d6d;
+  --highlight-ink: #f4f4f4;
+  color-scheme: dark;
+}
+
+:root[data-theme='red-gold'] {
+  --ink: #3b2d1f;
+  --muted: #785f3c;
+  --green: #8e3a2f;
+  --green-dark: #6f2c24;
+  --focus: #c58d30;
+  --paper: #f5e7c6;
+  --surface: #fff9ef;
+  --surface-soft: #f7e9d0;
+  --line: #d4b074;
+  --line-soft: #e6c78c;
+  --highlight: #e0b05d;
+  --highlight-ink: #3c220c;
+  color-scheme: light;
+}
+
+:root[data-theme='stardust'] {
+  --ink: #263b46;
+  --muted: #536d7a;
+  --green: #3d6c83;
+  --green-dark: #2f566a;
+  --focus: #3f829f;
+  --paper: #E1F6FF;
+  --surface: #f4fbff;
+  --surface-soft: #e9f6fc;
+  --line: #c2e2ef;
+  --line-soft: #d3ecf5;
+  --highlight: #cceef8;
+  --highlight-ink: #204356;
+  color-scheme: light;
+}
+
+:root[data-theme='lavender'] {
+  --ink: #302f4b;
+  --muted: #5d5b78;
+  --green: #5f5b8c;
+  --green-dark: #4d4978;
+  --focus: #7771ad;
+  --paper: #E6E5FA;
+  --surface: #f8f7ff;
+  --surface-soft: #efeffc;
+  --line: #d1d0e9;
+  --line-soft: #deddf2;
+  --highlight: #d9d7f3;
+  --highlight-ink: #39365f;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  min-width: 320px;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+::selection {
+  background: var(--highlight);
+}
