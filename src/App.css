@@ -1237,6 +1237,24 @@
   white-space: nowrap;
 }
 
+.editor-tool-button strong,
+.editor-tool-button em {
+  display: inline-block;
+  font-family: var(--serif);
+  font-size: 1.2em;
+  line-height: 1;
+}
+
+.editor-tool-button strong {
+  font-weight: 800;
+}
+
+.editor-tool-button em {
+  font-style: italic;
+  font-weight: 700;
+  transform: skewX(-8deg);
+}
+
 .alignment-button {
   height: 29px;
   padding: 5px;
@@ -1285,6 +1303,17 @@
   margin: 0 0 0.75em;
   min-height: 1em;
   white-space: pre-wrap;
+}
+
+.manuscript-input strong,
+.manuscript-input b {
+  font-weight: 700;
+}
+
+.manuscript-input em,
+.manuscript-input i {
+  font-style: italic;
+  font-weight: 600;
 }
 
 .manuscript-empty::before {

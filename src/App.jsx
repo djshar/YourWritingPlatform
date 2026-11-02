@@ -1122,6 +1122,31 @@ function WritingPanel({
     captureSelection();
   };
 
+  const applyInlineFormat = (command) => {
+    const editor = manuscriptRef.current;
+    const selection = window.getSelection();
+    if (!editor || !selection || selection.rangeCount === 0) return;
+
+    const range = selection.getRangeAt(0);
+    if (!editor.contains(range.startContainer) || !editor.contains(range.endContainer)) return;
+
+    editor.focus();
+    document.execCommand(command, false, undefined);
+    saveEditorFormatting();
+    captureSelection();
+  };
+
+  const insertEmDash = () => {
+    const editor = manuscriptRef.current;
+    const selection = window.getSelection();
+    if (!editor || !selection) return;
+
+    editor.focus();
+    document.execCommand('insertText', false, '—');
+    saveEditorFormatting();
+    captureSelection();
+  };
+
   const adjustIndent = (paragraphs, direction) => {
     if (!paragraphs.length) return;
     paragraphs.forEach((paragraph) => {
@@ -1578,6 +1603,52 @@ function WritingPanel({
                   <option value={16}>12 (standard manuscript)</option>
                 </select>
               </label>
+              <div aria-label="Inline formatting" className="alignment-tools" role="toolbar">
+                <span className="alignment-tools-label">Style</span>
+                <button
+                  aria-label="Bold selected text"
+                  className="editor-tool-button alignment-button"
+                  disabled={!hasSelection}
+                  onClick={() => applyInlineFormat('bold')}
+                  onMouseDown={(event) => event.preventDefault()}
+                  title="Bold selected text"
+                  type="button"
+                >
+                  <strong>B</strong>
+                </button>
+                <button
+                  aria-label="Italicize selected text"
+                  className="editor-tool-button alignment-button"
+                  disabled={!hasSelection}
+                  onClick={() => applyInlineFormat('italic')}
+                  onMouseDown={(event) => event.preventDefault()}
+                  title="Italicize selected text"
+                  type="button"
+                >
+                  <em style={{ fontStyle: 'italic' }}>I</em>
+                </button>
+                <button
+                  aria-label="Underline selected text"
+                  className="editor-tool-button alignment-button"
+                  disabled={!hasSelection}
+                  onClick={() => applyInlineFormat('underline')}
+                  onMouseDown={(event) => event.preventDefault()}
+                  title="Underline selected text"
+                  type="button"
+                >
+                  <span style={{ textDecoration: 'underline' }}>U</span>
+                </button>
+                <button
+                  aria-label="Insert an em dash"
+                  className="editor-tool-button alignment-button"
+                  onClick={insertEmDash}
+                  onMouseDown={(event) => event.preventDefault()}
+                  title="Insert an em dash at the cursor"
+                  type="button"
+                >
+                  <span style={{ fontWeight: 700 }}>—</span>
+                </button>
+              </div>
               <div aria-label="Alignment for selected paragraphs" className="alignment-tools" role="toolbar">
                 <span className="alignment-tools-label">Align</span>
                 {alignmentOptions.map((option) => (
