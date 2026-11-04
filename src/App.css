@@ -643,6 +643,23 @@
   color: var(--muted);
 }
 
+.book-cover-toggle {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 10px;
+  gap: 8px;
+  margin: 6px 0 12px;
+}
+
+.book-cover-toggle input {
+  accent-color: var(--green);
+}
+
+.book-cover-preview-hide-overlay .book-cover-text {
+  display: none;
+}
+
 .book-cover-preview-wrap {
   display: flex;
   justify-content: center;
@@ -1385,12 +1402,80 @@
   font-size: 9px;
 }
 
+.writing-goal-history {
+  display: grid;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.writing-goal-history-header {
+  align-items: baseline;
+  display: flex;
+  gap: 6px;
+  justify-content: space-between;
+}
+
+.writing-goal-history-title {
+  color: var(--ink);
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.writing-goal-history-detail {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.writing-goal-history-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.writing-goal-history-badge {
+  background: var(--surface-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 9px;
+  padding: 3px 6px;
+}
+
+.writing-goal-history-badge:hover,
+.writing-goal-history-badge:focus-visible {
+  border-color: var(--green);
+  color: var(--green-dark);
+}
+
+.writing-goal-history-badge.is-selected {
+  background: rgba(73, 104, 77, 0.09);
+  border-color: var(--green);
+  color: var(--green-dark);
+}
+
+.writing-footer-actions-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+  padding-top: 4px;
+}
+
 .writing-footer-actions {
   align-items: flex-end;
   display: flex;
   flex-direction: column;
+  gap: 6px;
   justify-content: flex-end;
   min-height: 58px;
+}
+
+.writing-footer-meta {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .writing-footer-buttons {
@@ -1429,6 +1514,27 @@
 
 .clear-button:hover {
   color: #a04c3e;
+}
+
+.page-nav-button {
+  background: transparent;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: var(--sans);
+  font-size: 9px;
+  padding: 5px 8px;
+}
+
+.page-nav-button:hover:not(:disabled) {
+  background: var(--surface-soft);
+  color: var(--green-dark);
+}
+
+.page-nav-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .planning-panel {

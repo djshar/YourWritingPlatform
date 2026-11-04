@@ -6,6 +6,7 @@ import './App.css';
 const STORAGE_KEY = 'writing-platform-workspace';
 const LOCAL_PREVIEW_WORKSPACE_KEY = 'writing-platform-local-preview-workspace';
 const DAILY_GOAL_STORAGE_PREFIX = 'writing-platform-daily-goal';
+const DAILY_GOAL_HISTORY_STORAGE_PREFIX = 'writing-platform-daily-goal-history';
 const LOCAL_PREVIEW_PROFILE_KEY = 'writing-platform-local-preview-profile';
 const BOOK_COVER_BUCKET = 'book-covers';
 const MAX_BOOK_COVER_BYTES = 5 * 1024 * 1024;
@@ -124,6 +125,118 @@ function saveDailyGoalState(userId, state) {
   }
 }
 
+function readDailyGoalHistory(userId) {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(`${DAILY_GOAL_HISTORY_STORAGE_PREFIX}:${userId}`) ?? '[]');
+    if (!Array.isArray(saved)) return [];
+    return saved.filter((entry) => entry && typeof entry.date === 'string' && typeof entry.type === 'string');
+  } catch (error) {
+    console.error('Could not read daily writing goal history.', error);
+    return [];
+  }
+}
+
+function saveDailyGoalHistory(userId, entries) {
+  try {
+    window.localStorage.setItem(`${DAILY_GOAL_HISTORY_STORAGE_PREFIX}:${userId}`, JSON.stringify(entries));
+  } catch (error) {
+    console.error('Could not save daily writing goal history.', error);
+  }
+}
+
+function normalizeDailyGoalHistoryEntries(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .filter((entry) => entry && typeof entry.date === 'string' && typeof entry.type === 'string')
+    .map((entry) => ({
+      date: entry.date,
+      type: entry.type,
+      target: Number(entry.target) > 0 ? Number(entry.target) : 0,
+    }))
+    .filter((entry) => entry.target > 0);
+}
+
+async function loadDailyGoalHistoryFromSupabase(userId) {
+  if (!userId || !supabase) return [];
+
+  try {
+    const { data, error } = await supabase
+      .from('user_daily_goal_history')
+      .select('goal_date, goal_type, goal_target')
+      .eq('user_id', userId)
+      .order('goal_date', { ascending: false });
+
+    if (error) throw error;
+    return normalizeDailyGoalHistoryEntries((data ?? []).map((entry) => ({
+      date: entry.goal_date,
+      type: entry.goal_type,
+      target: entry.goal_target,
+    })));
+  } catch (error) {
+    console.error('Could not load daily writing goal history from Supabase.', error);
+    return [];
+  }
+}
+
+async function syncDailyGoalHistoryToSupabase(userId, entries) {
+  if (!userId || !supabase) return;
+  const normalized = normalizeDailyGoalHistoryEntries(entries);
+  if (!normalized.length) return;
+
+  try {
+    const { error } = await supabase.from('user_daily_goal_history').upsert(
+      normalized.map((entry) => ({
+        user_id: userId,
+        goal_date: entry.date,
+        goal_type: entry.type,
+        goal_target: Number(entry.target),
+        achieved_amount: Number(entry.target),
+      })),
+      { onConflict: 'user_id,goal_date,goal_type,goal_target' },
+    );
+
+    if (error) throw error;
+  } catch (error) {
+    console.error('Could not sync daily writing goal history to Supabase.', error);
+  }
+}
+
+function seedLocalGoalHistory(userId) {
+  const demoEntries = [
+    { date: localDateKey(new Date(Date.now() - 4 * 24 * 60 * 60 * 1000)), type: 'words', target: 500 },
+    { date: localDateKey(new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)), type: 'words', target: 500 },
+    { date: localDateKey(new Date(Date.now() - 2 * 24 * 60 * 60 * 1000)), type: 'words', target: 500 },
+    { date: localDateKey(new Date(Date.now() - 1 * 24 * 60 * 60 * 1000)), type: 'minutes', target: 30 },
+  ];
+  saveDailyGoalHistory(userId, demoEntries);
+  return demoEntries;
+}
+
+function recordDailyGoalAchievement(userId, goal, dailyState, wordCounts) {
+  if (!goal || !['words', 'minutes'].includes(goal.daily_goal_type)) return readDailyGoalHistory(userId);
+  const target = Number(goal.daily_goal_target);
+  if (!Number.isFinite(target) || target < 1) return readDailyGoalHistory(userId);
+
+  const done = goal.daily_goal_type === 'words'
+    ? Object.entries(wordCounts).reduce((total, [chapterKey, words]) => (
+      total + Math.max(0, words - (dailyState.baselineCounts?.[chapterKey] ?? 0))
+    ), 0)
+    : (dailyState.seconds ?? 0) / 60;
+
+  if (done < target) return readDailyGoalHistory(userId);
+
+  const date = localDateKey();
+  const history = readDailyGoalHistory(userId);
+  const nextEntry = { date, type: goal.daily_goal_type, target };
+  if (history.some((entry) => entry.date === date && entry.type === nextEntry.type && Number(entry.target) === target)) {
+    return history;
+  }
+
+  const updated = [...history, nextEntry];
+  saveDailyGoalHistory(userId, updated);
+  return updated;
+}
+
 function makeGoalProgress(goal, dailyState, wordCounts) {
   if (!goal || !['words', 'minutes'].includes(goal.daily_goal_type)) return null;
   const target = Number(goal.daily_goal_target);
@@ -153,6 +266,7 @@ function createBook(id, title) {
     blurb: '',
     authorName: '',
     coverImagePath: '',
+    hideCoverTextOverlay: false,
     chapters: [{
       id: chapterId,
       title: 'Chapter 1',
@@ -228,6 +342,7 @@ function normalizeBook(book, index) {
   normalized.blurb = typeof book.blurb === 'string' ? book.blurb : '';
   normalized.authorName = typeof book.authorName === 'string' ? book.authorName : '';
   normalized.coverImagePath = typeof book.coverImagePath === 'string' ? book.coverImagePath : '';
+  normalized.hideCoverTextOverlay = Boolean(book.hideCoverTextOverlay);
   normalized.continuousWriting = book.continuousWriting === true;
   return normalized;
 }
@@ -239,7 +354,7 @@ function migrateWorkspace(saved) {
     return {
         books,
         activeBookId: books.some((book) => book.id === saved.activeBookId) ? saved.activeBookId : books[0].id,
-        theme: ['light', 'dark', 'sepia', 'pastel', 'stardust', 'lavender', 'red-white', 'red-black', 'dark-grey-white', 'red-gold', 'pestel'].includes(normalizedTheme)
+        theme: ['light', 'dark', 'sepia', 'pastel', 'sage', 'stardust', 'lavender', 'red-white', 'red-black', 'dark-grey-white', 'red-gold', 'pestel'].includes(normalizedTheme)
           ? normalizedTheme
           : 'sepia',
       };
@@ -630,15 +745,27 @@ function readWorkspace(storageKey = STORAGE_KEY) {
 function readLocalPreviewProfile() {
   try {
     const saved = window.localStorage.getItem(LOCAL_PREVIEW_PROFILE_KEY);
-    if (!saved) return {};
+    if (!saved) {
+      return {
+        daily_goal_type: 'words',
+        daily_goal_target: 500,
+      };
+    }
     const parsed = JSON.parse(saved);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('Saved local preview profile has an invalid format.');
     }
-    return parsed;
+    return {
+      daily_goal_type: ['none', 'words', 'minutes'].includes(parsed.daily_goal_type) ? parsed.daily_goal_type : 'words',
+      daily_goal_target: Number(parsed.daily_goal_target) > 0 ? Number(parsed.daily_goal_target) : 500,
+      ...parsed,
+    };
   } catch (error) {
     console.error('Could not read the local preview profile.', error);
-    return {};
+    return {
+      daily_goal_type: 'words',
+      daily_goal_target: 500,
+    };
   }
 }
 
@@ -945,20 +1072,30 @@ function BookCoverEditor({ activeBook, userId, offlinePreview, onUpdateBook }) {
           type="file"
         />
       </label>
+      <label className="book-cover-toggle">
+        <input
+          checked={Boolean(activeBook.hideCoverTextOverlay)}
+          onChange={(event) => updateBookField('hideCoverTextOverlay', event.target.checked)}
+          type="checkbox"
+        />
+        <span>Hide cover text overlay</span>
+      </label>
       <div className="book-cover-preview-wrap">
         <div
           aria-label={`Cover preview for ${activeBook.title}`}
-          className="book-cover-preview"
+          className={`book-cover-preview ${activeBook.hideCoverTextOverlay ? 'book-cover-preview-hide-overlay' : ''}`}
           role="img"
           style={coverUrl ? { backgroundImage: `url("${coverUrl}")` } : undefined}
         >
-          <div className="book-cover-text">
-            <div className="book-cover-title">
-          <strong>{activeBook.title || 'Your story title'}</strong>
-          {activeBook.coverSubtitle && <span>{activeBook.coverSubtitle}</span>}
+          {!activeBook.hideCoverTextOverlay && (
+            <div className="book-cover-text">
+              <div className="book-cover-title">
+            <strong>{activeBook.title || 'Your story title'}</strong>
+            {activeBook.coverSubtitle && <span>{activeBook.coverSubtitle}</span>}
+              </div>
+              {activeBook.authorName && <span className="book-cover-author">by {activeBook.authorName}</span>}
             </div>
-            {activeBook.authorName && <span className="book-cover-author">by {activeBook.authorName}</span>}
-          </div>
+          )}
         </div>
       </div>
       {activeBook.blurb && <p className="book-cover-blurb">{activeBook.blurb}</p>}
@@ -1006,6 +1143,7 @@ function WritingPanel({
   userId,
   offlinePreview,
   onUpdateBook,
+  goalHistory = [],
 }) {
   const manuscriptRef = useRef(null);
   const selectedRangeRef = useRef(null);
@@ -1034,6 +1172,7 @@ function WritingPanel({
   const [selectedLineSpacing, setSelectedLineSpacing] = useState('1.5');
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [exportStatus, setExportStatus] = useState('');
+  const [selectedGoalEntry, setSelectedGoalEntry] = useState(goalHistory[goalHistory.length - 1] ?? null);
   const fontFamilies = {
     serif: 'var(--serif)',
     'sans-serif': 'var(--sans)',
@@ -1066,6 +1205,23 @@ function WritingPanel({
   }, [activePage?.id, activePage?.content, activePage?.contentHtml]);
 
   useEffect(() => () => window.clearTimeout(autoSplitTimeoutRef.current), []);
+
+  useEffect(() => {
+    if (!goalHistory.length) {
+      setSelectedGoalEntry(null);
+      return;
+    }
+
+    setSelectedGoalEntry((current) => {
+      if (!current) return goalHistory[goalHistory.length - 1];
+      const matchesCurrent = goalHistory.some((entry) => (
+        entry.date === current.date
+        && entry.type === current.type
+        && Number(entry.target) === Number(current.target)
+      ));
+      return matchesCurrent ? current : goalHistory[goalHistory.length - 1];
+    });
+  }, [goalHistory]);
 
   const captureSelection = useCallback(() => {
     const editor = manuscriptRef.current;
@@ -1797,31 +1953,7 @@ function WritingPanel({
                   Page length reached. Continuous mode keeps writing across pages as you go.
                 </p>
               )}
-            <div className="writing-footer">
-              <div className="writing-footer-progress">
-                <span title="Total chapter count includes all previous pages; the current page count is listed separately">
-                  {`${totalChapterWords} total words · ${pageWords} on this page · ${earlierPageWords} from earlier pages`}
-                </span>
-                {goalProgress && (
-                  <div className="writing-goal-progress">
-                    <div className="writing-goal-progress-heading">
-                      <span>Daily writing goal</span>
-                      <span>{goalProgress.percent}%</span>
-                    </div>
-                    <div
-                      aria-label={`Daily writing goal ${goalProgress.percent}% complete`}
-                      aria-valuemax={100}
-                      aria-valuemin={0}
-                      aria-valuenow={goalProgress.percent}
-                      className="writing-goal-progress-track"
-                      role="progressbar"
-                    >
-                      <span style={{ width: `${goalProgress.percent}%` }} />
-                    </div>
-                    <span className="writing-goal-progress-label">{goalProgress.label}</span>
-                  </div>
-                )}
-              </div>
+            <div className="writing-footer-actions-row">
               <div className="writing-footer-actions">
                 <div className="writing-footer-buttons">
                   <button
@@ -1844,11 +1976,100 @@ function WritingPanel({
                   >
                     Clear page
                   </button>
+                  <button
+                    className="page-nav-button"
+                    disabled={pageIndex <= 0}
+                    onClick={() => {
+                      const previousPageId = activeChapter.pages[Math.max(0, pageIndex - 1)]?.id;
+                      if (previousPageId) onPageChange(activeChapter.id, previousPageId);
+                    }}
+                    type="button"
+                  >
+                    Previous page
+                  </button>
+                  <button
+                    className="page-nav-button"
+                    disabled={pageIndex >= activeChapter.pages.length - 1}
+                    onClick={() => {
+                      const nextPageId = activeChapter.pages[Math.min(activeChapter.pages.length - 1, pageIndex + 1)]?.id;
+                      if (nextPageId) onPageChange(activeChapter.id, nextPageId);
+                    }}
+                    type="button"
+                  >
+                    Next page
+                  </button>
                 </div>
-                <span className="active-page-number">
-                  Page {Math.max(1, pageIndex + 1)} of {Math.max(1, activeChapter.pages.length)}
+                <div className="writing-footer-meta">
+                  <span className="active-page-number">
+                    Page {Math.max(1, pageIndex + 1)} of {Math.max(1, activeChapter.pages.length)}
+                  </span>
+                  {exportStatus && <span className="export-status" role="status">{exportStatus}</span>}
+                </div>
+              </div>
+            </div>
+            <div className="writing-footer">
+              <div className="writing-footer-progress">
+                <span title="Total chapter count includes all previous pages; the current page count is listed separately">
+                  {`${totalChapterWords} total words · ${pageWords} on this page · ${earlierPageWords} from earlier pages`}
                 </span>
-                {exportStatus && <span className="export-status" role="status">{exportStatus}</span>}
+                {goalHistory.length > 0 && (
+                  <div className="writing-goal-history" aria-label="Goal achievement history">
+                    <div className="writing-goal-history-header">
+                      <span className="writing-goal-history-title">Goal history</span>
+                      {selectedGoalEntry && (
+                        <span className="writing-goal-history-detail">
+                          {new Date(`${selectedGoalEntry.date}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                          {' · '}
+                          {selectedGoalEntry.type === 'words'
+                            ? `${selectedGoalEntry.target} words`
+                            : `${selectedGoalEntry.target} minutes`}
+                        </span>
+                      )}
+                    </div>
+                    <div className="writing-goal-history-list">
+                      {goalHistory
+                        .slice(-6)
+                        .reverse()
+                        .map((entry) => {
+                          const match = selectedGoalEntry
+                            && entry.date === selectedGoalEntry.date
+                            && entry.type === selectedGoalEntry.type
+                            && Number(entry.target) === Number(selectedGoalEntry.target);
+
+                          return (
+                            <button
+                              aria-pressed={match}
+                              className={`writing-goal-history-badge ${match ? 'is-selected' : ''}`}
+                              key={`${entry.date}-${entry.type}-${entry.target}`}
+                              onClick={() => setSelectedGoalEntry(entry)}
+                              type="button"
+                            >
+                              {new Date(`${entry.date}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                            </button>
+                          );
+                        })}
+                    </div>
+                  </div>
+                )}
+                {goalProgress && (
+                  <div className="writing-goal-progress">
+                    <div className="writing-goal-progress-heading">
+                      <span>Daily writing goal</span>
+                      <span>{goalProgress.percent}%</span>
+                    </div>
+                    <div
+                      aria-label={`Daily writing goal ${goalProgress.percent}% complete`}
+                      aria-valuemax={100}
+                      aria-valuemin={0}
+                      aria-valuenow={goalProgress.percent}
+                      className="writing-goal-progress-track"
+                      role="progressbar"
+                    >
+                      <span style={{ width: `${goalProgress.percent}%` }} />
+                    </div>
+                    <span className="writing-goal-progress-label">{goalProgress.label}</span>
+                  </div>
+                )}
               </div>
             </div>
           </>
@@ -1870,9 +2091,11 @@ function ThemeSwitch({ theme, onChange }) {
     { value: 'dark', label: 'Dark', icon: '☾' },
     { value: 'sepia', label: 'Sepia', icon: '◒' },
     { value: 'pastel', label: 'Pastel', swatch: '#F8C8DC' },
+    { value: 'sage', label: 'Sage', swatch: '#dfe8d6' },
     { value: 'red-white', label: 'Red & White', swatch: '#f6dfe0' },
     { value: 'red-black', label: 'Red & Black', swatch: '#391c1c' },
     { value: 'dark-grey-white', label: 'Dark Grey & White', swatch: '#4b4b4b' },
+    { value: 'forest', label: 'Forest', swatch: '#203728' },
     { value: 'red-gold', label: 'Red Gold', swatch: '#d4b46a' },
     { value: 'stardust', label: 'Stardust', swatch: '#E1F6FF' },
     { value: 'lavender', label: 'Lavender', swatch: '#E6E5FA' },
@@ -1911,6 +2134,7 @@ function Dashboard({ userId, userMetadata, onGoalProgress, goalProgress, offline
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [activeTab, setActiveTab] = useState('write');
   const [saveStatus, setSaveStatus] = useState('Loading your workspace…');
+  const [goalHistory, setGoalHistory] = useState([]);
   const [isAddingBook, setIsAddingBook] = useState(false);
   const [newBookTitle, setNewBookTitle] = useState('');
   const pendingReviewRef = useRef(null);
@@ -2012,8 +2236,40 @@ function Dashboard({ userId, userMetadata, onGoalProgress, goalProgress, offline
     const wordCounts = getDailyWordCounts(workspace);
     const dailyState = readDailyGoalState(userId, wordCounts);
     dailyGoalStateRef.current = dailyState;
-    onGoalProgress(makeGoalProgress(userMetadata, dailyState, wordCounts));
-  }, [workspace, workspaceReady, userId, userMetadata, onGoalProgress]);
+    const progress = makeGoalProgress(userMetadata, dailyState, wordCounts);
+    onGoalProgress(progress);
+    const nextHistory = recordDailyGoalAchievement(userId, userMetadata, dailyState, wordCounts);
+    setGoalHistory((current) => {
+      const currentKey = current.map((entry) => `${entry.date}:${entry.type}:${entry.target}`).join('|');
+      const nextKey = nextHistory.map((entry) => `${entry.date}:${entry.type}:${entry.target}`).join('|');
+      if (currentKey === nextKey) return current;
+      if (!offlinePreview && userId) {
+        void syncDailyGoalHistoryToSupabase(userId, nextHistory);
+      }
+      return nextHistory;
+    });
+  }, [workspace, workspaceReady, userId, userMetadata, onGoalProgress, offlinePreview]);
+
+  useEffect(() => {
+    if (!workspaceReady) return undefined;
+
+    let active = true;
+
+    const loadGoalHistory = async () => {
+      if (offlinePreview) {
+        const storedHistory = readDailyGoalHistory(userId);
+        const nextHistory = storedHistory.length === 0 ? seedLocalGoalHistory(userId) : storedHistory;
+        if (active) setGoalHistory(nextHistory);
+        return;
+      }
+
+      const nextHistory = await loadDailyGoalHistoryFromSupabase(userId);
+      if (active) setGoalHistory(nextHistory);
+    };
+
+    void loadGoalHistory();
+    return () => { active = false; };
+  }, [workspaceReady, userId, offlinePreview]);
 
   useEffect(() => {
     if (!workspaceReady || userMetadata?.daily_goal_type !== 'minutes') return undefined;
@@ -2431,6 +2687,7 @@ function Dashboard({ userId, userMetadata, onGoalProgress, goalProgress, offline
           <WritingPanel
             key={activeBook.id}
             activeBook={activeBook}
+            goalHistory={goalHistory}
             goalProgress={goalProgress}
             activeChapter={activeChapter}
             activePage={activePage}
