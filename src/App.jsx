@@ -10,7 +10,7 @@ const DAILY_GOAL_HISTORY_STORAGE_PREFIX = 'writing-platform-daily-goal-history';
 const LOCAL_PREVIEW_PROFILE_KEY = 'writing-platform-local-preview-profile';
 const BOOK_COVER_BUCKET = 'book-covers';
 const MAX_BOOK_COVER_BYTES = 5 * 1024 * 1024;
-const AUTO_PAGE_CHAR_LIMIT = 3000;
+const AUTO_PAGE_WORD_LIMIT = 250;
 const AUTO_PAGE_SPLIT_DELAY = 100;
 
 function countWords(text = '') {
@@ -20,21 +20,16 @@ function countWords(text = '') {
 
 function splitEditorIntoPages(editor, limit) {
   const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
-  let nonSpaceCount = 0;
+  let wordCount = 0;
   const boundaries = [];
 
   while (walker.nextNode()) {
     const node = walker.currentNode;
-
-    for (let offset = 0; offset < node.length;) {
-      const codePoint = node.data.codePointAt(offset);
-      const character = String.fromCodePoint(codePoint);
-
-      if (!/\s/u.test(character)) {
-        nonSpaceCount += 1;
-        if (nonSpaceCount % limit === 0) boundaries.push({ node, offset: offset + character.length });
+    for (const match of node.data.matchAll(/\S+/g)) {
+      wordCount += 1;
+      if (wordCount % limit === 0) {
+        boundaries.push({ node, offset: match.index + match[0].length });
       }
-      offset += character.length;
     }
   }
 
@@ -62,21 +57,12 @@ function splitEditorIntoPages(editor, limit) {
   remaining.setStart(startNode, startOffset);
   remaining.setEnd(editor, editor.childNodes.length);
   const remainingHtml = htmlForRange(remaining);
-  chunks.push(nonSpaceCount % limit === 0 ? '<p><br></p>' : remainingHtml);
+  chunks.push(wordCount % limit === 0 ? '<p><br></p>' : remainingHtml);
   return chunks;
 }
 
 function editorHasReachedPageLimit(editor, limit) {
-  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
-  let nonSpaceCount = 0;
-
-  while (walker.nextNode()) {
-    for (const character of walker.currentNode.data) {
-      if (!/\s/u.test(character) && ++nonSpaceCount >= limit) return true;
-    }
-  }
-
-  return false;
+  return countWords(editor.textContent ?? '') >= limit;
 }
 
 function getDailyWordCounts(workspace) {
@@ -1164,8 +1150,6 @@ function WritingPanel({
   const editorCounts = {
     words: pageWords,
     characters: (activePage?.content ?? '').replace(/\r?\n/g, '').length,
-    nonWhitespaceCharacters: Array.from(activePage?.content ?? '')
-      .filter((character) => !/\s/u.test(character)).length,
   };
   const previousPageIdRef = useRef(null);
   const [selectedAlignment, setSelectedAlignment] = useState('left');
@@ -1399,14 +1383,13 @@ function WritingPanel({
   const performAutoSplit = (shouldFocus = true) => {
     const editor = manuscriptRef.current;
     if (!editor || !activeChapter || !activePage) return false;
-    const pageHtmlChunks = splitEditorIntoPages(editor, AUTO_PAGE_CHAR_LIMIT);
+    const pageHtmlChunks = splitEditorIntoPages(editor, AUTO_PAGE_WORD_LIMIT);
     if (!pageHtmlChunks || pageHtmlChunks.length < 2) return false;
 
     window.clearTimeout(autoSplitTimeoutRef.current);
     autoSplitTimeoutRef.current = null;
-    const keepWritingOnCurrentPage = activeBook.continuousWriting === true;
-    focusNewPageRef.current = shouldFocus && !keepWritingOnCurrentPage;
-    onAutoSplitPage(activeChapter.id, activePage.id, pageHtmlChunks, keepWritingOnCurrentPage);
+    focusNewPageRef.current = shouldFocus;
+    onAutoSplitPage(activeChapter.id, activePage.id, pageHtmlChunks);
     selectedRangeRef.current = null;
     setHasSelection(false);
     return true;
@@ -1427,7 +1410,7 @@ function WritingPanel({
     }
 
     const editor = manuscriptRef.current;
-    if (editor && editorHasReachedPageLimit(editor, AUTO_PAGE_CHAR_LIMIT)) {
+    if (editor && editorHasReachedPageLimit(editor, AUTO_PAGE_WORD_LIMIT)) {
       performAutoSplit();
     }
   };
@@ -1453,7 +1436,7 @@ function WritingPanel({
     if (editor.innerHTML !== html) editor.innerHTML = html;
     const shouldAutoSplit = (activeBook.continuousWriting === true || splitWhenNotAtEnd)
       && (caretAtEnd || splitWhenNotAtEnd)
-      && editorHasReachedPageLimit(editor, AUTO_PAGE_CHAR_LIMIT);
+      && editorHasReachedPageLimit(editor, AUTO_PAGE_WORD_LIMIT);
 
     if (shouldAutoSplit) {
       if (splitWhenNotAtEnd) {
@@ -1657,12 +1640,11 @@ function WritingPanel({
                 <button
                   aria-label={`Delete ${chapter.title || `Chapter ${index + 1}`}`}
                   className="chapter-delete"
-                  disabled={chapters.length <= 1}
                   onClick={() => {
                     onDeleteChapter(chapter.id);
                     setExpandedChapterIds((current) => current.filter((chapterId) => chapterId !== chapter.id));
                   }}
-                  title={chapters.length <= 1 ? 'A story must have at least one chapter' : `Delete ${chapter.title || `Chapter ${index + 1}`}`}
+                  title={`Delete ${chapter.title || `Chapter ${index + 1}`}`}
                   type="button"
                 >
                   ×
@@ -1885,7 +1867,7 @@ function WritingPanel({
               </button>
               <label
                 className="continuous-writing-option"
-                title="When checked, keep writing on this page after 2,000 non-whitespace characters. When unchecked, automatically start a new page at the limit."
+                title="When checked, continue writing and automatically start the next virtual page at 250 words. When unchecked, the current page breaks at the same limit."
               >
                 <input
                   checked={activeBook.continuousWriting === true}
@@ -1948,7 +1930,7 @@ function WritingPanel({
               suppressContentEditableWarning
             />
             {activeBook.continuousWriting === true
-              && editorCounts.nonWhitespaceCharacters >= AUTO_PAGE_CHAR_LIMIT && (
+              && editorCounts.words >= AUTO_PAGE_WORD_LIMIT && (
                 <p className="continuous-writing-hint" role="status">
                   Page length reached. Continuous mode keeps writing across pages as you go.
                 </p>
@@ -2431,22 +2413,43 @@ function Dashboard({ userId, userMetadata, onGoalProgress, goalProgress, offline
 
   const deleteChapter = (chapterId) => {
     const chapterIndex = activeBook.chapters.findIndex((chapter) => chapter.id === chapterId);
-    if (chapterIndex < 0 || activeBook.chapters.length <= 1) return;
+    if (chapterIndex < 0) return;
     const chapter = activeBook.chapters[chapterIndex];
     const title = chapter.title?.trim() || `Chapter ${chapterIndex + 1}`;
     if (!window.confirm(`Delete "${title}" and all ${chapter.pages.length} of its pages? This cannot be undone. Notes and highlights will stay in Notes.`)) return;
 
     const chapters = activeBook.chapters.filter((item) => item.id !== chapterId);
-    const nextChapter = activeBook.activeChapterId === chapterId
-      ? chapters[Math.min(chapterIndex, chapters.length - 1)]
-      : null;
-    updateActiveBook((current) => ({
-      ...current,
-      chapters: current.chapters.filter((item) => item.id !== chapterId),
-      ...(nextChapter
-        ? { activeChapterId: nextChapter.id, activePageId: nextChapter.pages[0]?.id }
-        : {}),
-    }));
+    const nextAvailableChapter = chapters[Math.min(chapterIndex, Math.max(0, chapters.length - 1))] ?? null;
+
+    updateActiveBook((current) => {
+      const remainingChapters = current.chapters.filter((item) => item.id !== chapterId);
+      if (remainingChapters.length > 0) {
+        const nextChapter = current.activeChapterId === chapterId
+          ? remainingChapters[Math.min(chapterIndex, Math.max(0, remainingChapters.length - 1))]
+          : null;
+        return {
+          ...current,
+          chapters: remainingChapters,
+          ...(nextChapter ? { activeChapterId: nextChapter.id, activePageId: nextChapter.pages[0]?.id } : {}),
+        };
+      }
+
+      const replacementId = `${current.id}-chapter-${Date.now()}`;
+      const replacementPage = { id: `${replacementId}-page-1`, content: '', contentHtml: '' };
+      const replacementChapter = {
+        id: replacementId,
+        title: 'Chapter 1',
+        content: '',
+        contentHtml: '',
+        pages: [replacementPage],
+      };
+      return {
+        ...current,
+        chapters: [replacementChapter],
+        activeChapterId: replacementChapter.id,
+        activePageId: replacementPage.id,
+      };
+    });
   };
 
   const addPage = (chapterId) => {
@@ -2469,7 +2472,7 @@ function Dashboard({ userId, userMetadata, onGoalProgress, goalProgress, offline
     });
   };
 
-  const autoSplitPage = (chapterId, pageId, pageHtmlChunks, keepWritingOnCurrentPage = false) => {
+  const autoSplitPage = (chapterId, pageId, pageHtmlChunks) => {
     if (pageHtmlChunks.length < 2) return;
     const timestamp = Date.now();
     const nextPageIds = pageHtmlChunks.slice(1).map((_, index) => (
@@ -2502,7 +2505,7 @@ function Dashboard({ userId, userMetadata, onGoalProgress, goalProgress, offline
         };
       }),
       activeChapterId: chapterId,
-      activePageId: keepWritingOnCurrentPage ? pageId : nextPageIds.at(-1),
+      activePageId: nextPageIds.at(-1),
     }));
   };
 
