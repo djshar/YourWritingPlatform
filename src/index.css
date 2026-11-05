@@ -59,6 +59,32 @@
   color-scheme: dark;
 }
 
+:root[data-theme='midnight'] {
+  --ink: #edf3ff;
+  --muted: #a9b7d6;
+  --green: #d8b66a;
+  --green-dark: #f5d98d;
+  --focus: #f4d78a;
+  --paper: #030d1b;
+  --surface: #0d1b2e;
+  --surface-soft: #0b1527;
+  --line: #1c2f4d;
+  --line-soft: #263d5d;
+  --highlight: #d9b66a;
+  --highlight-ink: #081827;
+  color-scheme: dark;
+  background:
+    radial-gradient(circle at 10% 15%, rgba(255, 255, 255, 0.8) 0 1.5px, transparent 2.2px),
+    radial-gradient(circle at 76% 14%, rgba(255, 255, 255, 0.7) 0 1.5px, transparent 2.2px),
+    radial-gradient(circle at 65% 26%, rgba(255, 255, 255, 0.75) 0 1.4px, transparent 2px),
+    radial-gradient(circle at 18% 66%, rgba(255, 255, 255, 0.8) 0 1.6px, transparent 2.4px),
+    radial-gradient(circle at 80% 72%, rgba(255, 255, 255, 0.65) 0 1.5px, transparent 2.5px),
+    radial-gradient(circle at 52% 48%, rgba(255, 255, 255, 0.6) 0 1.3px, transparent 2.1px),
+    linear-gradient(180deg, #020d1b 0%, #07162a 100%);
+  background-attachment: fixed;
+  background-size: 260px 260px, 260px 260px, 260px 260px, 260px 260px, 260px 260px, 260px 260px, 100% 100%;
+}
+
 :root[data-theme='sage'] {
   --ink: #203427;
   --muted: #536a5d;

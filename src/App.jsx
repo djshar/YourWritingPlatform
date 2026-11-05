@@ -340,7 +340,7 @@ function migrateWorkspace(saved) {
     return {
         books,
         activeBookId: books.some((book) => book.id === saved.activeBookId) ? saved.activeBookId : books[0].id,
-        theme: ['light', 'dark', 'sepia', 'pastel', 'sage', 'stardust', 'lavender', 'red-white', 'red-black', 'dark-grey-white', 'red-gold', 'pestel'].includes(normalizedTheme)
+        theme: ['light', 'dark', 'sepia', 'pastel', 'sage', 'stardust', 'lavender', 'red-white', 'red-black', 'dark-grey-white', 'red-gold', 'midnight', 'pestel'].includes(normalizedTheme)
           ? normalizedTheme
           : 'sepia',
       };
@@ -1157,6 +1157,9 @@ function WritingPanel({
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [exportStatus, setExportStatus] = useState('');
   const [selectedGoalEntry, setSelectedGoalEntry] = useState(goalHistory[goalHistory.length - 1] ?? null);
+  const [canUndo, setCanUndo] = useState(false);
+  const editorHistoryRef = useRef([]);
+  const editorHistoryIndexRef = useRef(-1);
   const fontFamilies = {
     serif: 'var(--serif)',
     'sans-serif': 'var(--sans)',
@@ -1164,6 +1167,45 @@ function WritingPanel({
     'times-new-roman': '"Times New Roman", Times, serif',
     arial: 'Arial, Helvetica, sans-serif',
   };
+
+  const pushEditorHistory = useCallback((html) => {
+    const normalizedHtml = sanitizeEditorHtml(html ?? '');
+    const previousHtml = editorHistoryRef.current[editorHistoryIndexRef.current];
+    if (previousHtml === normalizedHtml) {
+      setCanUndo(editorHistoryIndexRef.current > 0);
+      return;
+    }
+
+    editorHistoryRef.current = editorHistoryRef.current.slice(0, editorHistoryIndexRef.current + 1);
+    editorHistoryRef.current.push(normalizedHtml);
+    if (editorHistoryRef.current.length > 60) {
+      editorHistoryRef.current.shift();
+    }
+    editorHistoryIndexRef.current = editorHistoryRef.current.length - 1;
+    setCanUndo(editorHistoryIndexRef.current > 0);
+  }, []);
+
+  const undoLastEditorAction = useCallback(() => {
+    const editor = manuscriptRef.current;
+    if (!editor || !activeChapter || !activePage || editorHistoryIndexRef.current <= 0) return;
+
+    editorHistoryIndexRef.current -= 1;
+    const priorHtml = editorHistoryRef.current[editorHistoryIndexRef.current];
+    editor.innerHTML = sanitizeEditorHtml(priorHtml ?? '');
+    setCanUndo(editorHistoryIndexRef.current > 0);
+
+    const text = editorHtmlToPlainText(editor.innerHTML);
+    onUpdatePage(activeChapter.id, activePage.id, 'content', text);
+    onUpdatePage(activeChapter.id, activePage.id, 'contentHtml', editor.innerHTML);
+
+    editor.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }, [activeChapter, activePage, onUpdatePage]);
 
   useLayoutEffect(() => {
     if (previousPageIdRef.current === activePage?.id) return;
@@ -1174,6 +1216,10 @@ function WritingPanel({
       ? sanitizeEditorHtml(activePage.contentHtml)
       : plainTextToEditorHtml(activePage?.content ?? '');
     editor.innerHTML = html;
+    editorHistoryRef.current = [];
+    editorHistoryIndexRef.current = -1;
+    pushEditorHistory(html);
+    setCanUndo(false);
     selectedRangeRef.current = null;
     window.getSelection()?.removeAllRanges();
     if (focusNewPageRef.current) {
@@ -1186,7 +1232,7 @@ function WritingPanel({
       selection?.removeAllRanges();
       selection?.addRange(range);
     }
-  }, [activePage?.id, activePage?.content, activePage?.contentHtml]);
+  }, [activePage?.id, activePage?.content, activePage?.contentHtml, pushEditorHistory]);
 
   useEffect(() => () => window.clearTimeout(autoSplitTimeoutRef.current), []);
 
@@ -1317,6 +1363,12 @@ function WritingPanel({
     const range = selection.getRangeAt(0);
     if (!editor.contains(range.startContainer) || !editor.contains(range.endContainer)) return;
 
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'z') {
+      event.preventDefault();
+      undoLastEditorAction();
+      return;
+    }
+
     if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && range.collapsed) {
       const anchor = range.startContainer.nodeType === Node.ELEMENT_NODE
         ? range.startContainer
@@ -1434,6 +1486,7 @@ function WritingPanel({
 
     const html = sanitizeEditorHtml(editor.innerHTML);
     if (editor.innerHTML !== html) editor.innerHTML = html;
+    pushEditorHistory(html);
     const shouldAutoSplit = (activeBook.continuousWriting === true || splitWhenNotAtEnd)
       && (caretAtEnd || splitWhenNotAtEnd)
       && editorHasReachedPageLimit(editor, AUTO_PAGE_WORD_LIMIT);
@@ -1854,6 +1907,17 @@ function WritingPanel({
                   <option value="2">Double</option>
                 </select>
               </label>
+              <button
+                aria-label="Undo last action"
+                className="editor-tool-button"
+                disabled={!canUndo}
+                onClick={undoLastEditorAction}
+                onMouseDown={(event) => event.preventDefault()}
+                title="Undo the last editor action (Ctrl+Z)"
+                type="button"
+              >
+                ↶ <span>Undo</span>
+              </button>
               <span className="toolbar-divider" aria-hidden="true" />
               <button
                 aria-pressed={spellCheck}
@@ -2072,6 +2136,7 @@ function ThemeSwitch({ theme, onChange }) {
     { value: 'light', label: 'Light', icon: '☼' },
     { value: 'dark', label: 'Dark', icon: '☾' },
     { value: 'sepia', label: 'Sepia', icon: '◒' },
+    { value: 'midnight', label: 'Midnight', swatch: '#091b2d' },
     { value: 'pastel', label: 'Pastel', swatch: '#F8C8DC' },
     { value: 'sage', label: 'Sage', swatch: '#dfe8d6' },
     { value: 'red-white', label: 'Red & White', swatch: '#f6dfe0' },
