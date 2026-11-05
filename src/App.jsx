@@ -10,7 +10,7 @@ const DAILY_GOAL_HISTORY_STORAGE_PREFIX = 'writing-platform-daily-goal-history';
 const LOCAL_PREVIEW_PROFILE_KEY = 'writing-platform-local-preview-profile';
 const BOOK_COVER_BUCKET = 'book-covers';
 const MAX_BOOK_COVER_BYTES = 5 * 1024 * 1024;
-const AUTO_PAGE_WORD_LIMIT = 250;
+const AUTO_PAGE_WORD_LIMIT = 750;
 const AUTO_PAGE_SPLIT_DELAY = 100;
 
 function countWords(text = '') {
@@ -62,7 +62,10 @@ function splitEditorIntoPages(editor, limit) {
 }
 
 function editorHasReachedPageLimit(editor, limit) {
-  return countWords(editor.textContent ?? '') >= limit;
+  if (countWords(editor.textContent ?? '') >= limit) return true;
+  const visibleHeight = editor.clientHeight || 0;
+  const contentHeight = editor.scrollHeight || 0;
+  return visibleHeight > 0 && contentHeight > visibleHeight + 12;
 }
 
 function getDailyWordCounts(workspace) {
@@ -1463,20 +1466,51 @@ function WritingPanel({
     if (autoSplitTimeoutRef.current !== null) performAutoSplit(false);
   };
 
+  const restoreManualPageLayout = (chapter) => {
+    if (!chapter || !Array.isArray(chapter.pages) || chapter.pages.length <= 1) return chapter;
+
+    const mergedContentHtml = chapter.pages
+      .map((page) => sanitizeEditorHtml(page.contentHtml || plainTextToEditorHtml(page.content ?? '')))
+      .join('');
+    const mergedContent = editorHtmlToPlainText(mergedContentHtml);
+    const firstPage = chapter.pages[0];
+    const restoredPage = {
+      ...firstPage,
+      content: mergedContent,
+      contentHtml: mergedContentHtml,
+    };
+
+    return {
+      ...chapter,
+      pages: [restoredPage],
+      content: mergedContent,
+      contentHtml: mergedContentHtml,
+    };
+  };
+
   const handleContinuousWritingChange = (event) => {
     const enabled = event.target.checked;
-    onUpdateBook(activeBook.id, { continuousWriting: enabled });
 
-    if (enabled) {
-      window.clearTimeout(autoSplitTimeoutRef.current);
-      autoSplitTimeoutRef.current = null;
+    if (!enabled) {
+      updateActiveBook((current) => ({
+        ...current,
+        continuousWriting: false,
+        chapters: current.chapters.map((chapter) => chapter.id === activeChapter.id ? restoreManualPageLayout(chapter) : chapter),
+        activePageId: activeChapter.pages[0]?.id,
+      }));
+      const editor = manuscriptRef.current;
+      if (editor) {
+        const html = sanitizeEditorHtml(activeChapter.pages[0]?.contentHtml || plainTextToEditorHtml(activeChapter.pages[0]?.content ?? ''));
+        editor.innerHTML = html;
+        onUpdatePage(activeChapter.id, activeChapter.pages[0]?.id, 'content', editorHtmlToPlainText(html));
+        onUpdatePage(activeChapter.id, activeChapter.pages[0]?.id, 'contentHtml', html);
+      }
       return;
     }
 
-    const editor = manuscriptRef.current;
-    if (editor && editorHasReachedPageLimit(editor, AUTO_PAGE_WORD_LIMIT)) {
-      performAutoSplit();
-    }
+    onUpdateBook(activeBook.id, { continuousWriting: enabled });
+    window.clearTimeout(autoSplitTimeoutRef.current);
+    autoSplitTimeoutRef.current = null;
   };
 
   const handleEditorInput = ({ splitWhenNotAtEnd = false } = {}) => {
