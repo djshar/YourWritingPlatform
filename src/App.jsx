@@ -79,13 +79,22 @@ function localDateKey(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+function normalizeGoalStorageUserId(userId) {
+  return String(userId ?? 'anonymous').trim() || 'anonymous';
+}
+
+function dailyGoalStorageKey(userId, prefix) {
+  return `${prefix}:${normalizeGoalStorageUserId(userId)}`;
+}
+
 function readDailyGoalState(userId, wordCounts) {
   const date = localDateKey();
-  const key = `${DAILY_GOAL_STORAGE_PREFIX}:${userId}`;
+  const key = dailyGoalStorageKey(userId, DAILY_GOAL_STORAGE_PREFIX);
   try {
     const saved = JSON.parse(window.localStorage.getItem(key) ?? 'null');
     if (
       saved?.date === date
+      && saved?.userId === normalizeGoalStorageUserId(userId)
       && saved.baselineCounts
       && typeof saved.baselineCounts === 'object'
       && Number.isFinite(saved.seconds)
@@ -94,7 +103,7 @@ function readDailyGoalState(userId, wordCounts) {
     console.error('Could not read daily writing goal progress.', error);
   }
 
-  const state = { date, baselineCounts: wordCounts, seconds: 0 };
+  const state = { userId: normalizeGoalStorageUserId(userId), date, baselineCounts: wordCounts, seconds: 0 };
   try {
     window.localStorage.setItem(key, JSON.stringify(state));
   } catch (error) {
@@ -105,7 +114,10 @@ function readDailyGoalState(userId, wordCounts) {
 
 function saveDailyGoalState(userId, state) {
   try {
-    window.localStorage.setItem(`${DAILY_GOAL_STORAGE_PREFIX}:${userId}`, JSON.stringify(state));
+    window.localStorage.setItem(dailyGoalStorageKey(userId, DAILY_GOAL_STORAGE_PREFIX), JSON.stringify({
+      ...state,
+      userId: normalizeGoalStorageUserId(userId),
+    }));
   } catch (error) {
     console.error('Could not save daily writing goal progress.', error);
   }
@@ -113,7 +125,7 @@ function saveDailyGoalState(userId, state) {
 
 function readDailyGoalHistory(userId) {
   try {
-    const saved = JSON.parse(window.localStorage.getItem(`${DAILY_GOAL_HISTORY_STORAGE_PREFIX}:${userId}`) ?? '[]');
+    const saved = JSON.parse(window.localStorage.getItem(dailyGoalStorageKey(userId, DAILY_GOAL_HISTORY_STORAGE_PREFIX)) ?? '[]');
     if (!Array.isArray(saved)) return [];
     return saved.filter((entry) => entry && typeof entry.date === 'string' && typeof entry.type === 'string');
   } catch (error) {
@@ -124,7 +136,7 @@ function readDailyGoalHistory(userId) {
 
 function saveDailyGoalHistory(userId, entries) {
   try {
-    window.localStorage.setItem(`${DAILY_GOAL_HISTORY_STORAGE_PREFIX}:${userId}`, JSON.stringify(entries));
+    window.localStorage.setItem(dailyGoalStorageKey(userId, DAILY_GOAL_HISTORY_STORAGE_PREFIX), JSON.stringify(entries));
   } catch (error) {
     console.error('Could not save daily writing goal history.', error);
   }
@@ -230,7 +242,7 @@ function makeGoalProgress(goal, dailyState, wordCounts) {
 
   const done = goal.daily_goal_type === 'words'
     ? Object.entries(wordCounts).reduce((total, [chapterKey, words]) => (
-      total + Math.max(0, words - (dailyState.baselineCounts[chapterKey] ?? 0))
+      total + Math.max(0, words - (dailyState.baselineCounts?.[chapterKey] ?? 0))
     ), 0)
     : dailyState.seconds / 60;
   const unit = goal.daily_goal_type === 'words' ? 'words' : 'minutes';
