@@ -1237,6 +1237,55 @@
   padding-left: 8px;
 }
 
+.selection-tooltip {
+  background: rgba(30, 33, 24, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(21, 25, 20, 0.22);
+  display: flex;
+  gap: 4px;
+  left: 0;
+  padding: 4px;
+  pointer-events: auto;
+  position: fixed;
+  transform: translate(-50%, -100%);
+  z-index: 40;
+}
+
+.selection-tooltip button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #f3f2e8;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  justify-content: center;
+  min-height: 26px;
+  min-width: 32px;
+  padding: 4px 8px;
+}
+
+.selection-tooltip button:hover,
+.selection-tooltip button:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+  outline: none;
+}
+
+.selection-tooltip button strong,
+.selection-tooltip button em {
+  display: inline-block;
+  font-family: var(--serif);
+  font-size: 1.05em;
+  line-height: 1;
+}
+
+.selection-tooltip button em {
+  font-style: italic;
+}
+
 .editor-tool-button {
   align-items: center;
   background: transparent;
@@ -1329,8 +1378,15 @@
 
 .manuscript-input em,
 .manuscript-input i {
-  font-style: italic;
-  font-weight: 600;
+  font-style: italic !important;
+  font-weight: 400 !important;
+}
+
+.manuscript-input mark {
+  background: rgba(255, 221, 85, 0.7);
+  border-radius: 2px;
+  color: inherit;
+  padding: 0 0.12em;
 }
 
 .manuscript-empty::before {

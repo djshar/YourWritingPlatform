@@ -490,7 +490,7 @@ function plainTextToEditorHtml(text = '') {
 
 function sanitizeEditorHtml(html) {
   const parsed = new DOMParser().parseFromString(html, 'text/html');
-  const allowedTags = new Set(['P', 'DIV', 'BR', 'STRONG', 'B', 'EM', 'I', 'U', 'S', 'SPAN']);
+  const allowedTags = new Set(['P', 'DIV', 'BR', 'STRONG', 'B', 'EM', 'I', 'U', 'S', 'SPAN', 'MARK']);
   [...parsed.body.querySelectorAll('*')].reverse().forEach((element) => {
     if (!allowedTags.has(element.tagName)) {
       element.replaceWith(parsed.createTextNode(element.textContent ?? ''));
@@ -513,7 +513,11 @@ function sanitizeEditorHtml(html) {
     const alignment = element.tagName === 'P' ? element.style.textAlign : '';
     const lineHeight = element.tagName === 'P' ? element.style.lineHeight : '';
     const textIndent = element.tagName === 'P' ? element.style.textIndent : '';
+    const preservedInlineStyle = ['B', 'STRONG', 'EM', 'I', 'U', 'S', 'SPAN', 'MARK'].includes(element.tagName)
+      ? element.getAttribute('style')
+      : '';
     [...element.attributes].forEach((attribute) => element.removeAttribute(attribute.name));
+    if (preservedInlineStyle) element.style.cssText = preservedInlineStyle;
     if (['left', 'center', 'right', 'justify'].includes(alignment)) element.style.textAlign = alignment;
     if (['1', '1.15', '1.5', '2'].includes(lineHeight)) element.style.lineHeight = lineHeight;
     if (/^(?:[0-7](?:\.\d+)?|8(?:\.0+)?)em$/.test(textIndent)) element.style.textIndent = textIndent;
@@ -1154,6 +1158,7 @@ function WritingPanel({
     activeChapter ? [activeChapter.id] : []
   ));
   const [hasSelection, setHasSelection] = useState(false);
+  const [selectionTooltip, setSelectionTooltip] = useState({ visible: false, x: 0, y: 0 });
   const pageIndex = activeChapter ? activeChapter.pages.findIndex((page) => page.id === activePage?.id) : -1;
   const pageWords = countWords(activePage?.content ?? '');
   const earlierPageWords = activeChapter
@@ -1268,12 +1273,58 @@ function WritingPanel({
     });
   }, [goalHistory]);
 
-  const captureSelection = useCallback(() => {
+  const updateSelectionTooltip = useCallback((positionOverride) => {
+    const editor = manuscriptRef.current;
+    const selection = window.getSelection();
+    if (!editor || !selection || selection.rangeCount === 0) {
+      setSelectionTooltip({ visible: false, x: 0, y: 0 });
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    if (
+      range.collapsed
+      || !editor.contains(range.startContainer)
+      || !editor.contains(range.endContainer)
+      || !range.toString().trim()
+    ) {
+      setSelectionTooltip({ visible: false, x: 0, y: 0 });
+      return;
+    }
+
+    if (positionOverride) {
+      setSelectionTooltip({ visible: true, x: positionOverride.x, y: positionOverride.y });
+      return;
+    }
+
+    const rects = Array.from(range.getClientRects ? range.getClientRects() : []);
+    const fallbackRect = range.getBoundingClientRect();
+    const rect = rects.length
+      ? rects.reduce((bounds, item) => ({
+        left: Math.min(bounds.left, item.left),
+        right: Math.max(bounds.right, item.right),
+        top: Math.min(bounds.top, item.top),
+        bottom: Math.max(bounds.bottom, item.bottom),
+      }), {
+        left: rects[0].left,
+        right: rects[0].right,
+        top: rects[0].top,
+        bottom: rects[0].bottom,
+      })
+      : fallbackRect;
+
+    const midpointX = (rect.left + rect.right) / 2 + window.scrollX;
+    const midpointY = (rect.top + window.scrollY) - 12;
+    setSelectionTooltip({ visible: true, x: midpointX, y: midpointY });
+  }, []);
+
+  const captureSelection = useCallback((event) => {
     const editor = manuscriptRef.current;
     const selection = window.getSelection();
     if (!editor || !selection?.rangeCount) {
       selectedRangeRef.current = null;
       setHasSelection(false);
+      setSelectionTooltip({ visible: false, x: 0, y: 0 });
       return null;
     }
 
@@ -1286,6 +1337,7 @@ function WritingPanel({
     ) {
       selectedRangeRef.current = null;
       setHasSelection(false);
+      setSelectionTooltip({ visible: false, x: 0, y: 0 });
       return null;
     }
 
@@ -1295,12 +1347,23 @@ function WritingPanel({
     const paragraphs = [...editor.querySelectorAll('p')].filter((paragraph) => savedRange.intersectsNode(paragraph));
     setSelectedAlignment(paragraphs[0]?.style.textAlign || 'left');
     setSelectedLineSpacing(paragraphs[0]?.style.lineHeight || '1.5');
+
+    const mousePosition = event && typeof event.clientX === 'number' && typeof event.clientY === 'number'
+      ? { x: event.clientX, y: event.clientY }
+      : null;
+    updateSelectionTooltip(mousePosition);
     return savedRange;
-  }, []);
+  }, [updateSelectionTooltip]);
 
   useEffect(() => {
     document.addEventListener('selectionchange', captureSelection);
-    return () => document.removeEventListener('selectionchange', captureSelection);
+    document.addEventListener('mouseup', captureSelection);
+    document.addEventListener('keyup', captureSelection);
+    return () => {
+      document.removeEventListener('selectionchange', captureSelection);
+      document.removeEventListener('mouseup', captureSelection);
+      document.removeEventListener('keyup', captureSelection);
+    };
   }, [captureSelection]);
 
   const saveEditorFormatting = () => {
@@ -1323,6 +1386,58 @@ function WritingPanel({
     captureSelection();
   };
 
+  const toggleInlineFormat = (tagName, inlineStyle) => {
+    const editor = manuscriptRef.current;
+    const selection = window.getSelection();
+    if (!editor || !selection || selection.rangeCount === 0) return;
+
+    const range = selection.getRangeAt(0);
+    if (
+      range.collapsed
+      || !editor.contains(range.startContainer)
+      || !editor.contains(range.endContainer)
+      || !range.toString().trim()
+    ) {
+      return;
+    }
+
+    const preferredTag = tagName.toUpperCase();
+    const commonAncestor = range.commonAncestorContainer;
+    const ancestorElement = commonAncestor.nodeType === Node.ELEMENT_NODE
+      ? commonAncestor
+      : commonAncestor.parentElement;
+    const enclosingMatch = ancestorElement?.closest ? ancestorElement.closest(preferredTag) : null;
+
+    if (enclosingMatch) {
+      const replacementRange = document.createRange();
+      replacementRange.selectNodeContents(enclosingMatch);
+      const fragment = replacementRange.extractContents();
+      enclosingMatch.replaceWith(fragment);
+
+      const nextRange = document.createRange();
+      nextRange.selectNodeContents(editor);
+      nextRange.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(nextRange);
+      saveEditorFormatting();
+      captureSelection();
+      return;
+    }
+
+    const wrapper = document.createElement(tagName);
+    if (inlineStyle) wrapper.style.cssText = inlineStyle;
+    const fragment = range.extractContents();
+    wrapper.appendChild(fragment);
+    range.insertNode(wrapper);
+
+    const nextRange = document.createRange();
+    nextRange.selectNodeContents(wrapper);
+    selection.removeAllRanges();
+    selection.addRange(nextRange);
+    saveEditorFormatting();
+    captureSelection();
+  };
+
   const applyInlineFormat = (command) => {
     const editor = manuscriptRef.current;
     const selection = window.getSelection();
@@ -1331,8 +1446,49 @@ function WritingPanel({
     const range = selection.getRangeAt(0);
     if (!editor.contains(range.startContainer) || !editor.contains(range.endContainer)) return;
 
+    if (command === 'bold') {
+      toggleInlineFormat('b', 'font-weight: 700;');
+      return;
+    }
+    if (command === 'italic') {
+      toggleInlineFormat('i', 'font-style: italic; font-weight: normal;');
+      return;
+    }
+    if (command === 'underline') {
+      toggleInlineFormat('u', 'text-decoration: underline;');
+      return;
+    }
+
     editor.focus();
     document.execCommand(command, false, undefined);
+    saveEditorFormatting();
+    captureSelection();
+  };
+
+  const applyHighlightFormat = () => {
+    const editor = manuscriptRef.current;
+    const selection = window.getSelection();
+    if (!editor || !selection || selection.rangeCount === 0) return;
+
+    const range = selection.getRangeAt(0);
+    if (
+      range.collapsed
+      || !editor.contains(range.startContainer)
+      || !editor.contains(range.endContainer)
+      || !range.toString().trim()
+    ) {
+      return;
+    }
+
+    const highlight = document.createElement('mark');
+    const fragment = range.extractContents();
+    highlight.appendChild(fragment);
+    range.insertNode(highlight);
+
+    const nextRange = document.createRange();
+    nextRange.selectNodeContents(highlight);
+    selection.removeAllRanges();
+    selection.addRange(nextRange);
     saveEditorFormatting();
     captureSelection();
   };
@@ -1533,8 +1689,8 @@ function WritingPanel({
     const html = sanitizeEditorHtml(editor.innerHTML);
     if (editor.innerHTML !== html) editor.innerHTML = html;
     pushEditorHistory(html);
-    const shouldAutoSplit = (activeBook.continuousWriting === true || splitWhenNotAtEnd)
-      && (caretAtEnd || splitWhenNotAtEnd)
+    const shouldAutoSplit = !activeBook.continuousWriting
+      && (splitWhenNotAtEnd || caretAtEnd)
       && editorHasReachedPageLimit(editor, AUTO_PAGE_WORD_LIMIT);
 
     if (shouldAutoSplit) {
@@ -1886,6 +2042,61 @@ function WritingPanel({
                   <span style={{ fontWeight: 700 }}>—</span>
                 </button>
               </div>
+              {selectionTooltip.visible && (
+                <div
+                  className="selection-tooltip"
+                  style={{ left: `${selectionTooltip.x}px`, top: `${selectionTooltip.y}px` }}
+                >
+                  <button
+                    aria-label="Highlight selected text"
+                    onClick={() => {
+                      applyHighlightFormat();
+                      setSelectionTooltip({ visible: false, x: 0, y: 0 });
+                    }}
+                    onMouseDown={(event) => event.preventDefault()}
+                    title="Highlight selected text"
+                    type="button"
+                  >
+                    Highlight
+                  </button>
+                  <button
+                    aria-label="Bold selected text"
+                    onClick={() => {
+                      applyInlineFormat('bold');
+                      setSelectionTooltip({ visible: false, x: 0, y: 0 });
+                    }}
+                    onMouseDown={(event) => event.preventDefault()}
+                    title="Bold selected text"
+                    type="button"
+                  >
+                    <strong>B</strong>
+                  </button>
+                  <button
+                    aria-label="Italicize selected text"
+                    onClick={() => {
+                      applyInlineFormat('italic');
+                      setSelectionTooltip({ visible: false, x: 0, y: 0 });
+                    }}
+                    onMouseDown={(event) => event.preventDefault()}
+                    title="Italicize selected text"
+                    type="button"
+                  >
+                    <em>I</em>
+                  </button>
+                  <button
+                    aria-label="Underline selected text"
+                    onClick={() => {
+                      applyInlineFormat('underline');
+                      setSelectionTooltip({ visible: false, x: 0, y: 0 });
+                    }}
+                    onMouseDown={(event) => event.preventDefault()}
+                    title="Underline selected text"
+                    type="button"
+                  >
+                    <span style={{ textDecoration: 'underline' }}>U</span>
+                  </button>
+                </div>
+              )}
               <div aria-label="Alignment for selected paragraphs" className="alignment-tools" role="toolbar">
                 <span className="alignment-tools-label">Align</span>
                 {alignmentOptions.map((option) => (
@@ -2028,6 +2239,7 @@ function WritingPanel({
               onBlur={handleEditorBlur}
               onMouseUp={captureSelection}
               onKeyUp={captureSelection}
+              onSelect={captureSelection}
               onPaste={handleEditorPaste}
               ref={manuscriptRef}
               role="textbox"
